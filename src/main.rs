@@ -88,7 +88,8 @@ fn inner_eval(t: Box<Expr>, variables: &mut Rc<HashMap<String, Expr>>) -> Expr {
             _ => panic!("Can only add integers"),
         },
 
-        x => x,
+        Int(x) => Int(x),
+        Bool(x) => Bool(x),
     }
 }
 
