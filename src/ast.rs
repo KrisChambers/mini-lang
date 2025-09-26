@@ -14,6 +14,12 @@ pub enum Expr {
     // Conditional
     If(Box<Expr>, Box<Expr>, Box<Expr>),
 
+    // Lambda creation
+    Lambda(Vec<Expr>, Box<Expr>),
+
+    // Function application
+    Apply(Box<Expr>, Vec<Expr>),
+
     /// Int Operators
     Add(Box<Expr>, Box<Expr>),
     Subtract(Box<Expr>, Box<Expr>),

@@ -1,5 +1,6 @@
 mod eval;
 mod ast;
+mod parser;
 
 use eval::eval_program;
 use ast::Expr;
