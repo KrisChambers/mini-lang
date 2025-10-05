@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::Expr;
+use crate::ast::{Expr, BinaryOperator};
 
 pub fn eval_program(p: Vec<Expr>) -> Option<Expr> {
     let mut bindings = Rc::new(HashMap::new());
@@ -92,25 +92,72 @@ fn inner_eval(t: Expr, bindings: &mut Rc<HashMap<String, Expr>>) -> Expr {
             _ => panic!("if condition needs to be a boolean"),
         },
 
-        Add(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
-            (Int(a), Int(b)) => Int(a + b),
-            _ => panic!("Can only add integers"),
+        Binary(op, left, right) => {
+            use BinaryOperator::*;
+            let left = inner_eval(*left, bindings);
+            let right = inner_eval(*right, bindings);
+
+            match op {
+                Add => match (left, right) {
+                    (Int(a), Int(b)) => Int(a + b),
+                    _ => panic!("Can only add integers"),
+                },
+                Subtract => match (left, right) {
+                    (Int(a), Int(b)) => Int(a - b),
+                    _ => panic!("Can only add integers"),
+                },
+                Multiply => match (left, right) {
+                    (Int(a), Int(b)) => Int(a * b),
+                    _ => panic!("Can only add integers"),
+                },
+
+                Divide => match (left, right) {
+                    (Int(a), Int(b)) => Int(a / b),
+                    _ => panic!("Can only add integers"),
+                },
+                And => match (left, right) {
+                    (Bool(a), Bool(b)) => Bool(a && b),
+                    _ => panic!("Boolen operation on non-booleans"),
+                },
+                Or => match (left, right) {
+                     (Bool(a), Bool(b)) => Bool(a || b),
+                    _ => panic!("Boolen operation on non-booleans"),
+                }
+                Equals => match (left, right) {
+                    (Int(a), Int(b)) => Bool(a == b),
+                    (Bool(a), Bool(b)) => Bool(a == b),
+                    _ => Bool(false) // Could also just not compare them?
+                },
+            }
         },
-        Subtract(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
-            (Int(a), Int(b)) => Int(a - b),
-            _ => panic!("Can only add integers"),
-        },
-        Mult(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
-            (Int(a), Int(b)) => Int(a * b),
-            _ => panic!("Can only add integers"),
-        },
-        Divide(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
-            (Int(a), Int(b)) => Int(a / b),
-            _ => panic!("Can only add integers"),
-        },
+
+        //Add(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
+        //},
+        //Subtract(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
+            //(Int(a), Int(b)) => Int(a - b),
+            //_ => panic!("Can only add integers"),
+        //},
+        //Mult(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
+        //    (Int(a), Int(b)) => Int(a * b),
+        //    _ => panic!("Can only add integers"),
+        //},
+        //Divide(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
+        //    (Int(a), Int(b)) => Int(a / b),
+        //    _ => panic!("Can only add integers"),
+        //},
 
         Int(x) => Int(x),
         Bool(x) => Bool(x),
+
+        //And(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
+        //    (Bool(l), Bool(r)) => Bool(l && r),
+        //    _ => panic!("Not a boolean")
+        //},
+
+        //Or(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
+        //    (Bool(l), Bool(r)) => Bool(l||r),
+        //    _ => panic!("Not a boolean")
+        //},
     }
 }
 
@@ -118,10 +165,11 @@ fn inner_eval(t: Expr, bindings: &mut Rc<HashMap<String, Expr>>) -> Expr {
 mod tests {
     use super::*;
     use Expr::*;
+    use BinaryOperator::*;
 
     #[test]
     fn add() {
-        let expr = Add(Box::new(Int(1)), Box::new(Int(2)));
+        let expr = Binary(Add, Box::new(Int(1)), Box::new(Int(2)));
         let result = eval(expr);
 
         assert_eq!(result, Int(3));
@@ -168,14 +216,14 @@ mod tests {
     #[test]
     fn var_in_int_expression() {
         let bind = Let("a".to_string(), Box::new(Int(1)));
-        let cond = Add(Box::new(Var("a".to_string())), Box::new(Int(10)));
+        let cond = Binary(Add, Box::new(Var("a".to_string())), Box::new(Int(10)));
         let result = eval_program(vec![bind, cond]).unwrap();
 
         assert_eq!(result, Int(11))
     }
 
     fn create_add_expr() -> Expr {
-        Lambda(vec![Var("a".to_string()), Var("b".to_string())], Box::new(Add(Box::new(Var("a".to_string())), Box::new(Var("b".to_string())))))
+        Lambda(vec![Var("a".to_string()), Var("b".to_string())], Box::new(Binary(Add,Box::new(Var("a".to_string())), Box::new(Var("b".to_string())))))
     }
 
     #[test]
@@ -204,10 +252,6 @@ mod tests {
 
     #[test]
     fn lambda_application_evaluation() {
-        /*
-            let add = fn(a, b) { a + b }
-            add(1, 2)
-        */
         let lambda = Let("add".to_string(), Box::new(create_add_expr()));
         let apply = Apply(Box::new(Var("add".to_string())), vec![Int(1), Int(2)]);
 

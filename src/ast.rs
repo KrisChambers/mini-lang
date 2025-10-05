@@ -1,5 +1,21 @@
 
 
+#[derive(PartialEq, Debug, PartialOrd, Eq, Clone)]
+pub enum BinaryOperator {
+    // Numeric
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+
+    // Boolean
+    And,
+    Or,
+
+    // Comparison
+    Equals
+}
+
 /// Expression AST
 #[derive(Eq, PartialEq, PartialOrd, Debug, Clone)]
 pub enum Expr {
@@ -20,10 +36,16 @@ pub enum Expr {
     // Function application
     Apply(Box<Expr>, Vec<Expr>),
 
-    /// Int Operators
-    Add(Box<Expr>, Box<Expr>),
-    Subtract(Box<Expr>, Box<Expr>),
-    Mult(Box<Expr>, Box<Expr>),
-    Divide(Box<Expr>, Box<Expr>),
+    Binary(BinaryOperator, Box<Expr>, Box<Expr>),
+
+    //// Int Operators
+    //Add(Box<Expr>, Box<Expr>),
+    //Subtract(Box<Expr>, Box<Expr>),
+    //Mult(Box<Expr>, Box<Expr>),
+    //Divide(Box<Expr>, Box<Expr>),
+
+    ///// Bool Operators
+    //And(Box<Expr>, Box<Expr>),
+    //Or(Box<Expr>, Box<Expr>)
 }
 

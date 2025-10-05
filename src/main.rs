@@ -1,17 +1,14 @@
 mod eval;
 mod ast;
 mod parser;
+mod types;
 
-use eval::eval_program;
-use ast::Expr;
+use parser::parse;
 
 fn main() {
-    use Expr::*;
+    let input = "let x = 1;";
 
-    let bind = Let("a".to_string(), Box::new(Int(1)));
-    let cond = Add(Box::new(Var("a".to_string())), Box::new(Int(10)));
-    let result = eval_program(vec![bind, cond]).unwrap();
+    let _ = parse(input);
 
-    assert_eq!(result, Int(11))
 }
 
