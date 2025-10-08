@@ -192,7 +192,7 @@ pub fn parse(input: &str) -> Vec<Expr> {
 
     match result {
         Ok((rest, lines)) => {
-            print!("unparsed input: {}", rest);
+            println!("unparsed input: {}", rest);
             lines
         }
         Err(err) => match err {
