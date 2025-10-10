@@ -1,6 +1,4 @@
-
-
-#[derive(PartialEq, Debug, PartialOrd, Eq, Clone)]
+#[derive(PartialEq, Debug, PartialOrd, Eq, Clone, Hash)]
 pub enum BinaryOperator {
     // Numeric
     Add,
@@ -17,7 +15,7 @@ pub enum BinaryOperator {
 }
 
 /// Expression AST
-#[derive(Eq, PartialEq, PartialOrd, Debug, Clone)]
+#[derive(Eq, PartialEq, PartialOrd, Debug, Clone, Hash)]
 pub enum Expr {
     // Integer Value Ex: Int(1)
     Int(i32),
@@ -32,6 +30,7 @@ pub enum Expr {
 
     // Lambda creation
     Lambda(Vec<Expr>, Box<Expr>),
+    // Lambdas are assumed to be of the form fn(a) { expr } to keep things simple
 
     // Function application
     Apply(Box<Expr>, Vec<Expr>),

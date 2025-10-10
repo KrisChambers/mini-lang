@@ -130,34 +130,8 @@ fn inner_eval(t: Expr, bindings: &mut Rc<HashMap<String, Expr>>) -> Expr {
                 },
             }
         },
-
-        //Add(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
-        //},
-        //Subtract(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
-            //(Int(a), Int(b)) => Int(a - b),
-            //_ => panic!("Can only add integers"),
-        //},
-        //Mult(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
-        //    (Int(a), Int(b)) => Int(a * b),
-        //    _ => panic!("Can only add integers"),
-        //},
-        //Divide(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
-        //    (Int(a), Int(b)) => Int(a / b),
-        //    _ => panic!("Can only add integers"),
-        //},
-
         Int(x) => Int(x),
         Bool(x) => Bool(x),
-
-        //And(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
-        //    (Bool(l), Bool(r)) => Bool(l && r),
-        //    _ => panic!("Not a boolean")
-        //},
-
-        //Or(left, right) => match (inner_eval(*left, bindings), inner_eval(*right, bindings)) {
-        //    (Bool(l), Bool(r)) => Bool(l||r),
-        //    _ => panic!("Not a boolean")
-        //},
     }
 }
 
