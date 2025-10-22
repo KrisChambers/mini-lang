@@ -2,6 +2,7 @@
 members = [
     "idea"
 , "stlc"]
+resolver = "3"
 
 [workspace.dependencies]
 nom = "8.0.0"

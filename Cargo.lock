@@ -27,3 +27,6 @@ dependencies = [
 [[package]]
 name = "stlc"
 version = "0.1.0"
+dependencies = [
+ "nom",
+]

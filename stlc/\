@@ -1,0 +1,139 @@
+use nom::{
+    IResult, Parser,
+    branch::alt,
+    bytes::complete::tag,
+    character::{
+        complete::{alpha1, multispace0},
+        multispace0,
+    },
+    combinator::{map, opt, value},
+    sequence::{self, delimited, pair, preceded, terminated},
+};
+
+#[derive(Eq, PartialEq, Clone, Debug)]
+enum Expr {
+    Var(String),
+    Lambda(String, Type, Box<Expr>),
+    App(Box<Expr>, Box<Expr>),
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
+    Lit(Literal),
+    BinOp(Op, Box<Expr>, Box<Expr>),
+}
+
+#[derive(Eq, PartialEq, Clone, Debug)]
+enum Type {
+    Int,
+    Bool,
+    Arrow(Box<Type>, Box<Type>),
+}
+
+#[derive(Eq, PartialEq, Clone, Debug)]
+enum Literal {
+    Int(i32),
+    Bool(bool),
+}
+
+#[derive(Eq, PartialEq, Clone, Debug)]
+enum Op {
+    Add,
+    Subtract,
+    And,
+    Or,
+}
+
+//pub fn parse(input: &str) -> IResult<&str, Vec<Expr>> {
+//    Ok(vec![Expr::Var("Blah".to_string())])
+//}
+
+fn parse_lambda(input: &str) -> IResult<&str, Expr> {
+    delimited(tag("\\("), parse_lambda_parameter, tag(")")).parse(input)
+}
+
+fn parse_lambda_paramter(input: &str) -> IResult<&str, (String, Type)> {
+    /*
+    * x : Int
+    * y : Bool
+    * z : Int -> Int
+    * */
+    let (input, name) = map(delimited(opt(multispace0), alpha1, opt(multispace0)), |s| {
+        s.to_string()
+    })
+    .parse(input)?;
+
+    let (input, _) = tag(":");
+
+    let (input, _) = // parse_type
+}
+
+fn parse_lambda_parameter_name(input: &str) -> IResult<&str, String> {
+    map(alpha1, |s: &str| s.to_string()).parse(input)
+}
+
+fn parse_arrow(input: &str) -> IResult<&str, &str> {
+    terminated(preceded(opt(multispace0), tag("->")), opt(multispace0)).parse(input)
+}
+
+fn parse_type(input: &str) -> IResult<&str, Type> {
+    /*
+     * Int
+     * Bool
+     * Int -> Int
+     * (Int -> Int) -> Int
+     */
+    let (input, first) = alt((
+        sequence::terminated(sequence::preceded(tag("("), parse_type), tag(")")),
+        value(Type::Int, tag("Int")),
+        value(Type::Bool, tag("Bool")),
+    ))
+    .parse(input)?;
+
+    if let (input, Some(_)) = opt(parse_arrow).parse(input)? {
+        map(parse_type, |snd| {
+            Type::Arrow(Box::new(first.clone()), Box::new(snd))
+        })
+        .parse(input)
+    } else {
+        Ok((input, first))
+    }
+}
+
+#[test]
+fn parsing_int_type() {
+    let input = "Int";
+    let (_, actual) = parse_type(input).unwrap();
+
+    assert_eq!(actual, Type::Int);
+}
+
+#[test]
+fn parsing_bool_type() {
+    let input = "Bool";
+    let (_, actual) = parse_type(input).unwrap();
+
+    assert_eq!(actual, Type::Bool);
+}
+
+#[test]
+fn parsing_arrow_type() {
+    let input = "Int -> Int";
+    let (_, actual) = parse_type(input).unwrap();
+
+    assert_eq!(
+        actual,
+        Type::Arrow(Box::new(Type::Int), Box::new(Type::Int))
+    );
+}
+
+#[test]
+fn parsing_complex_arrow() {
+    let input = "(Int -> Int) -> Int";
+    let (_, actual) = parse_type(input).unwrap();
+
+    assert_eq!(
+        actual,
+        Type::Arrow(
+            Box::new(Type::Arrow(Box::new(Type::Int), Box::new(Type::Int))),
+            Box::new(Type::Int)
+        )
+    );
+}
