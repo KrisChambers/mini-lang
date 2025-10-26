@@ -1,11 +1,19 @@
+//! This module implements some basic type checking
+//! It does not do any inference of types.
+//!
+
 use std::collections::HashMap;
 
 use crate::parser::{Expr, Literal, Op, TypeAnn};
 
+/// Represents types in the simply-typed lambda calculus
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum Type {
+    /// Integer Type
     Int,
+    /// Boolean Type
     Bool,
+    /// Function type from a source type to a target type
     Arrow(Box<Type>, Box<Type>),
 }
 
@@ -21,6 +29,7 @@ impl From<TypeAnn> for Type {
     }
 }
 
+/// Errors that can occur during type checking
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TypeError {
     MisMatch(String),
@@ -28,22 +37,40 @@ pub enum TypeError {
     MissingTypeInfoForVariable(String),
 }
 
-struct TypeEnvironment(HashMap<String, Type>);
+/// Type Environment for mapping variable names to their types.
+///
+/// Maintains the typing context during type checking allowing
+/// type lookup and scoped addition / removal of variable bindings.
+pub struct TypeEnvironment(HashMap<String, Type>);
 
 impl TypeEnvironment {
     pub fn new() -> Self {
         TypeEnvironment(HashMap::new())
     }
 
-    /// If the type exists then the return is the existing type
+    /// Adds a variable binding to the environment.
+    ///
+    /// # Returns
+    /// * `None` if the variable is fresh.
+    /// * `Some(Type)` containg the previous type if it already is defined.
     pub fn add(&mut self, var_name: &str, var_type: &Type) -> Option<Type> {
         self.0.insert(var_name.to_string(), var_type.clone())
     }
 
+    /// Get the type associated to a variable.
+    ///
+    /// # Returns
+    /// * `None` if the variable is not in the environment.
+    /// * `Some(Type)` containing the variable's type.
     pub fn get(&self, var_name: &str) -> Option<&Type> {
         self.0.get(var_name)
     }
 
+    /// Remove a variable binding from the environment
+    ///
+    /// # Returns
+    /// * `None` If the variable didn't exist.
+    /// * `Some(Type)` contianing the type of the variable.
     pub fn remove(&mut self, var_name: &str) -> Option<Type> {
         self.0.remove(var_name)
     }
@@ -55,6 +82,9 @@ impl Default for TypeEnvironment {
     }
 }
 
+/// Type-checks and expression.
+///
+/// Assumes an empty Type Environment.
 pub fn type_check(expr: Expr) -> Option<TypeError> {
     let mut env = TypeEnvironment::new();
 
