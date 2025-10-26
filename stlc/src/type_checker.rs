@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::parser::{Expr, Literal, Op, TypeAnn};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
-enum Type {
+pub enum Type {
     Int,
     Bool,
     Arrow(Box<Type>, Box<Type>),
@@ -28,11 +28,11 @@ pub enum TypeError {
     MissingTypeInfoForVariable(String),
 }
 
-struct Context(HashMap<String, Type>);
+struct TypeEnvironment(HashMap<String, Type>);
 
-impl Context {
+impl TypeEnvironment {
     pub fn new() -> Self {
-        Context(HashMap::new())
+        TypeEnvironment(HashMap::new())
     }
 
     /// If the type exists then the return is the existing type
@@ -49,41 +49,41 @@ impl Context {
     }
 }
 
-impl Default for Context {
+impl Default for TypeEnvironment {
     fn default() -> Self {
         Self::new()
     }
 }
 
 pub fn type_check(expr: Expr) -> Option<TypeError> {
-    let mut context = Context::new();
+    let mut env = TypeEnvironment::new();
 
-    inner_type_check(expr, &mut context)
+    inner_type_check(expr, &mut env)
 }
 
-fn inner_type_check(expr: Expr, context: &mut Context) -> Option<TypeError> {
+fn inner_type_check(expr: Expr, env: &mut TypeEnvironment) -> Option<TypeError> {
     match expr {
-        Expr::Var(var_name) => match context.get(&var_name) {
+        Expr::Var(var_name) => match env.get(&var_name) {
             Some(_) => None,
             None => Some(TypeError::MissingTypeInfoForVariable(var_name)),
         },
-        Expr::Lambda(var_name, type_ann, expr) => context
+        Expr::Lambda(var_name, type_ann, expr) => env
             .add(&var_name, &type_ann.into())
             .map(|_| TypeError::AlreadyDefined(var_name.clone()))
             // If the variable is fresh then we can add this to the context and check the
             // expression
-            .or_else(|| inner_type_check(*expr, context))
+            .or_else(|| inner_type_check(*expr, env))
             // If there was no type error then we just remove it from the context
             .or_else(|| {
-                context.remove(&var_name);
+                env.remove(&var_name);
                 None
             }),
         Expr::App(f, arg) => {
-            let f_type = match get_type(*f, context) {
+            let f_type = match get_type(*f, env) {
                 Some(t) => t,
                 None => return Some(TypeError::MisMatch("Could not find function type".to_string()))
             };
-            let arg_type = match get_type(*arg, context) {
+            let arg_type = match get_type(*arg, env) {
                 Some(t) => t,
                 None => return Some(TypeError::MisMatch("Could not find argument type".to_string()))
             };
@@ -98,7 +98,7 @@ fn inner_type_check(expr: Expr, context: &mut Context) -> Option<TypeError> {
                 }
             }
         },
-        Expr::If(expr, true_expr, false_expr) => get_type(*expr, context)
+        Expr::If(expr, true_expr, false_expr) => get_type(*expr, env)
             .and_then(|x| {
                 if x != Type::Bool {
                     Some(TypeError::MisMatch("Expected type Bool".to_string()))
@@ -107,7 +107,7 @@ fn inner_type_check(expr: Expr, context: &mut Context) -> Option<TypeError> {
                 }
             })
             .or_else(|| {
-                let true_type = match get_type(*true_expr, context) {
+                let true_type = match get_type(*true_expr, env) {
                     Some(t) => t,
                     None => {
                         return Some(TypeError::MisMatch(
@@ -116,7 +116,7 @@ fn inner_type_check(expr: Expr, context: &mut Context) -> Option<TypeError> {
                     }
                 };
 
-                let false_type = match get_type(*false_expr, context) {
+                let false_type = match get_type(*false_expr, env) {
                     Some(t) => t,
                     None => {
                         return Some(TypeError::MisMatch(
@@ -139,8 +139,8 @@ fn inner_type_check(expr: Expr, context: &mut Context) -> Option<TypeError> {
                 Op::Add | Op::Subtract => Type::Int,
                 Op::And | Op::Or => Type::Bool,
             };
-            let left_type = get_type(*left, context)?;
-            let right_type = get_type(*right, context)?;
+            let left_type = get_type(*left, env)?;
+            let right_type = get_type(*right, env)?;
 
             if left_type != expected || right_type != expected {
                 Some(TypeError::MisMatch(
@@ -153,12 +153,12 @@ fn inner_type_check(expr: Expr, context: &mut Context) -> Option<TypeError> {
     }
 }
 
-fn get_type(expr: Expr, context: &mut Context) -> Option<Type> {
+fn get_type(expr: Expr, env: &mut TypeEnvironment) -> Option<Type> {
     match expr {
-        Expr::Var(var_name) => context.get(&var_name).cloned(),
-        Expr::Lambda(_, type_ann, expr) => Some(type_ann.into()),
-        Expr::App(expr, expr1) => todo!(),
-        Expr::If(expr, expr1, expr2) => get_type(*expr1, context),
+        Expr::Var(var_name) => env.get(&var_name).cloned(),
+        Expr::Lambda(_, type_ann, _body) => Some(type_ann.into()),
+        Expr::App(_name, _arg) => todo!(),
+        Expr::If(_cond, true_branch, _false_branch) => get_type(*true_branch, env),
         Expr::Lit(literal) => Some(match literal {
             Literal::Int(_) => Type::Int,
             Literal::Bool(_) => Type::Bool,
