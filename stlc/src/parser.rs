@@ -10,11 +10,12 @@ use nom::{
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum Expr {
     Var(String),
-    Lambda(String, TypeAnn, Box<Expr>),
+    Lambda(String, Option<TypeAnn>, Box<Expr>),
     App(Box<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Lit(Literal),
     BinOp(Op, Box<Expr>, Box<Expr>),
+    Let(String, Box<Expr>, Box<Expr>)
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -105,13 +106,13 @@ fn parse_variable(input: &str) -> IResult<&str, Expr> {
 }
 
 fn keyword(input: &str) -> IResult<&str, &str> {
-    alt((tag("if"), tag("else"), tag("then"), tag("let"))).parse(input)
+    alt((tag("if"), tag("else"), tag("then"), tag("let"), tag("in"))).parse(input)
 }
 
 fn parse_literal(input: &str) -> IResult<&str, Expr> {
     preceded(
         not(keyword),
-        alt((parse_literal_bool, parse_literal_int, parse_variable)),
+        delimited(opt_whitespace,alt((parse_literal_bool, parse_literal_int, parse_variable)), opt_whitespace),
     )
     .parse(input)
 }
@@ -131,6 +132,7 @@ fn parse_literal(input: &str) -> IResult<&str, Expr> {
 * Almost anything can be an application ...
 */
 
+
 fn parse_expr(input: &str) -> IResult<&str, Expr> {
     alt((
         parse_if_expr,
@@ -144,9 +146,13 @@ fn parse_expr(input: &str) -> IResult<&str, Expr> {
 
 fn parse_lambda(input: &str) -> IResult<&str, Expr> {
     // \(x:Int) -> x + 5
+    // \x -> x + 5
 
-    let (input, (param, tparam)) =
-        delimited(tag(r"\("), parse_lambda_parameter, tag(")")).parse(input)?;
+    let (input, (param, tparam)) = alt((
+        map(delimited(tag(r"\("), parse_lambda_parameter, tag(")")), |(p, t)| (p, Some(t))),
+        map(preceded(tag(r"\"), alpha1), |x: &str| (x.to_string(), None))
+    )).parse(input)?;
+
     let (input, _) = parse_arrow(input)?;
 
     map(parse_expr, |expr| {
@@ -161,6 +167,7 @@ fn opt_whitespace(input: &str) -> IResult<&str, Option<&str>> {
 
 fn parse_lambda_parameter(input: &str) -> IResult<&str, (String, TypeAnn)> {
     /*
+     * x
      * x : Int
      * y : Bool
      * z : Int -> Int
@@ -218,6 +225,28 @@ fn parse_keyword(keyword: &str) -> impl Fn(&str) -> IResult<&str, &str> {
     }
 }
 
+fn parse_let_assignment(input:&str) -> IResult<&str, (String, Expr)> {
+    let (input, var) = preceded(opt_whitespace, alpha1).parse(input)?;
+    let (input, _) = preceded(opt_whitespace, tag("=")).parse(input)?;
+    let (input, e1) = parse_expr(input)?;
+
+    nom::IResult::Ok((input, (var.to_string(), e1)))
+
+}
+
+fn parse_let_expr(input: &str) -> IResult<&str, Expr> {
+    let (input, _) = parse_keyword("let")(input)?;
+    let (input, (var, e1)) = parse_let_assignment(input)?;
+    let (input, _) = preceded(opt_whitespace, tag("in")).parse(input)?;
+    let (input, e2) = parse_expr(input)?;
+
+    nom::IResult::Ok((input, Expr::Let(
+        var.to_string(),
+        Box::new(e1.clone()),
+        Box::new(e2.clone())
+    )))
+}
+
 fn parse_if_expr(input: &str) -> IResult<&str, Expr> {
     let (input, _) = parse_keyword("if")(input)?;
     let (input, cond) = parse_expr(input)?;
@@ -273,6 +302,15 @@ fn parsing_int_type() {
 }
 
 #[test]
+fn parsing_literals() {
+    let input = " 5 ";
+    let expected = Expr::Lit(Literal::Int(5));
+
+    let (_, actual) = parse_literal(input).unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn parsing_bool_type() {
     let input = "Bool";
     let (_, actual) = parse_type(input).unwrap();
@@ -290,6 +328,7 @@ fn parsing_arrow_type() {
         TypeAnn::Arrow(Box::new(TypeAnn::Int), Box::new(TypeAnn::Int))
     );
 }
+
 
 #[test]
 fn parsing_complex_arrow() {
@@ -310,7 +349,7 @@ fn parse_simple_lambda() {
     let input = "\\(x: Int) -> x + 5";
     let expected = Expr::Lambda(
         "x".to_string(),
-        TypeAnn::Int,
+        Some(TypeAnn::Int),
         Box::new(Expr::BinOp(
             Op::Add,
             Box::new(Expr::Var("x".to_string())),
@@ -320,6 +359,23 @@ fn parse_simple_lambda() {
     let (_, actual) = parse_lambda(input).unwrap();
 
     assert_eq!(actual, expected)
+}
+
+#[test]
+fn parsing_lambda_without_type_annotation() {
+    let input = r"\x -> x + 5";
+    let expected = Expr::Lambda(
+        "x".to_string(),
+        None,
+        Box::new(Expr::BinOp(
+            Op::Add,
+            Box::new(Expr::Var("x".to_string())),
+            Box::new(Expr::Lit(Literal::Int(5))),
+        ))
+    );
+
+    let (_, actual) = parse_lambda(input).unwrap();
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -342,7 +398,7 @@ fn parse_lambda_definition_application() {
     let expected = Expr::App(
         Box::new(Expr::Lambda(
             "x".to_string(),
-            TypeAnn::Int,
+            Some(TypeAnn::Int),
             Box::new(Expr::BinOp(
                 Op::Add,
                 Box::new(Expr::Var("x".to_string())),
@@ -362,10 +418,10 @@ fn parse_multi_lambda() {
     let input = r"\(f: Int -> Int) -> \(x: Int) -> f x";
     let expected = Expr::Lambda(
         "f".to_string(),
-        TypeAnn::Arrow(Box::new(TypeAnn::Int), Box::new(TypeAnn::Int)),
+        Some(TypeAnn::Arrow(Box::new(TypeAnn::Int), Box::new(TypeAnn::Int))),
         Box::new(Expr::Lambda(
             "x".to_string(),
-            TypeAnn::Int,
+            Some(TypeAnn::Int),
             Box::new(Expr::App(
                 Box::new(Expr::Var("f".to_string())),
                 Box::new(Expr::Var("x".to_string())),
@@ -521,7 +577,7 @@ fn parse_lambda_with_bool_param() {
     let input = r"\(b: Bool) -> b";
     let expected = Expr::Lambda(
         "b".to_string(),
-        TypeAnn::Bool,
+        Some(TypeAnn::Bool),
         Box::new(Expr::Var("b".to_string())),
     );
     let (_, actual) = parse_lambda(input).unwrap();
@@ -533,7 +589,7 @@ fn parse_lambda_with_function_type() {
     let input = r"\(f: Int -> Bool) -> f";
     let expected = Expr::Lambda(
         "f".to_string(),
-        TypeAnn::Arrow(Box::new(TypeAnn::Int), Box::new(TypeAnn::Bool)),
+        Some(TypeAnn::Arrow(Box::new(TypeAnn::Int), Box::new(TypeAnn::Bool))),
         Box::new(Expr::Var("f".to_string())),
     );
     let (_, actual) = parse_lambda(input).unwrap();
@@ -545,7 +601,7 @@ fn parse_lambda_returning_if() {
     let input = r"\(x: Int) -> if True then x else 0";
     let expected = Expr::Lambda(
         "x".to_string(),
-        TypeAnn::Int,
+        Some(TypeAnn::Int),
         Box::new(Expr::If(
             Box::new(Expr::Lit(Literal::Bool(true))),
             Box::new(Expr::Var("x".to_string())),
@@ -564,12 +620,12 @@ fn parse_if_with_lambda_in_branch() {
         Box::new(Expr::Lit(Literal::Bool(true))),
         Box::new(Expr::Lambda(
             "x".to_string(),
-            TypeAnn::Int,
+            Some(TypeAnn::Int),
             Box::new(Expr::Var("x".to_string())),
         )),
         Box::new(Expr::Lambda(
             "y".to_string(),
-            TypeAnn::Int,
+            Some(TypeAnn::Int),
             Box::new(Expr::BinOp(
                 Op::Add,
                 Box::new(Expr::Var("y".to_string())),
@@ -602,5 +658,31 @@ fn parse_variable_in_binary_op() {
         Box::new(Expr::Lit(Literal::Int(5))),
     );
     let (_, actual) = parse_binary_expr(input).unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn parse_simple_let_assignment() {
+    let input = "x = 5";
+    let expected = ("x".to_string(), Expr::Lit(Literal::Int(5)));
+
+    let (_, actual) = parse_let_assignment(input).unwrap();
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn parse_simple_let_expr() {
+    let input = "let x = 5 in x + 2";
+    let expected = Expr::Let(
+        "x".to_string(),
+        Box::new(Expr::Lit(Literal::Int(5))),
+        Box::new(Expr::BinOp(
+            Op::Add,
+            Box::new(Expr::Var("x".to_string())),
+            Box::new(Expr::Lit(Literal::Int(2))),
+        )),
+    );
+    let (_, actual) = parse_let_expr(input).unwrap();
     assert_eq!(actual, expected);
 }

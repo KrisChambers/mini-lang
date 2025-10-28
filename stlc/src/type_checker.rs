@@ -9,12 +9,15 @@ use crate::parser::{Expr, Literal, Op, TypeAnn};
 /// Represents types in the simply-typed lambda calculus
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum Type {
+    /// Function type from a source type to a target type
+    Arrow(Box<Type>, Box<Type>),
+
+    /// Primitive Types
+
     /// Integer Type
     Int,
     /// Boolean Type
     Bool,
-    /// Function type from a source type to a target type
-    Arrow(Box<Type>, Box<Type>),
 }
 
 impl From<TypeAnn> for Type {
@@ -94,109 +97,127 @@ pub fn type_check(expr: Expr) -> Option<TypeError> {
 fn inner_type_check(expr: Expr, env: &mut TypeEnvironment) -> Option<TypeError> {
     match expr {
         Expr::Var(var_name) => match env.get(&var_name) {
-            Some(_) => None,
-            None => Some(TypeError::MissingTypeInfoForVariable(var_name)),
-        },
-        Expr::Lambda(var_name, type_ann, expr) => env
-            .add(&var_name, &type_ann.into())
-            .map(|_| TypeError::AlreadyDefined(var_name.clone()))
-            // If the variable is fresh then we can add this to the context and check the
-            // expression
-            .or_else(|| inner_type_check(*expr, env))
-            // If there was no type error then we just remove it from the context
-            .or_else(|| {
-                env.remove(&var_name);
-                None
-            }),
-        Expr::App(f, arg) => {
-            let f_type = match get_type(*f, env) {
-                Some(t) => t,
-                None => return Some(TypeError::MisMatch("Could not find function type".to_string()))
-            };
-            let arg_type = match get_type(*arg, env) {
-                Some(t) => t,
-                None => return Some(TypeError::MisMatch("Could not find argument type".to_string()))
-            };
-
-            match f_type {
-                Type::Int => Some(TypeError::MisMatch("Int is not a valid function type".to_string())),
-                Type::Bool => Some(TypeError::MisMatch("Bool is not a valid function type".to_string())),
-                Type::Arrow(_source, target) => if *target != arg_type {
-                    Some(TypeError::MisMatch("Function Type and argument type mismatch".to_string()))
-                } else {
+                Some(_) => None,
+                None => Some(TypeError::MissingTypeInfoForVariable(var_name)),
+            },
+        Expr::Lambda(var_name, type_ann, expr) => type_ann.and_then(|t| env
+                .add(&var_name, &t.into())
+                .map(|_| TypeError::AlreadyDefined(var_name.clone()))
+                // If the variable is fresh then we can add this to the context and check the
+                // expression
+                .or_else(|| inner_type_check(*expr, env))
+                // If there was no type error then we just remove it from the context
+                .or_else(|| {
+                    env.remove(&var_name);
                     None
+                })),
+        Expr::App(f, arg) => {
+                let f_type = match get_type(*f, env) {
+                    Some(t) => t,
+                    None => {
+                        return Some(TypeError::MisMatch(
+                            "Could not find function type".to_string(),
+                        ));
+                    }
+                };
+                let arg_type = match get_type(*arg, env) {
+                    Some(t) => t,
+                    None => {
+                        return Some(TypeError::MisMatch(
+                            "Could not find argument type".to_string(),
+                        ));
+                    }
+                };
+
+                match f_type {
+                    Type::Int => Some(TypeError::MisMatch(
+                        "Int is not a valid function type".to_string(),
+                    )),
+                    Type::Bool => Some(TypeError::MisMatch(
+                        "Bool is not a valid function type".to_string(),
+                    )),
+                    Type::Arrow(_source, target) => {
+                        if *target != arg_type {
+                            Some(TypeError::MisMatch(
+                                "Function Type and argument type mismatch".to_string(),
+                            ))
+                        } else {
+                            None
+                        }
+                    }
                 }
             }
-        },
         Expr::If(expr, true_expr, false_expr) => get_type(*expr, env)
-            .and_then(|x| {
-                if x != Type::Bool {
-                    Some(TypeError::MisMatch("Expected type Bool".to_string()))
-                } else {
-                    None
-                }
-            })
-            .or_else(|| {
-                let true_type = match get_type(*true_expr, env) {
-                    Some(t) => t,
-                    None => {
-                        return Some(TypeError::MisMatch(
-                            "Could not determine type for true branch".to_string(),
-                        ));
+                .and_then(|x| {
+                    if x != Type::Bool {
+                        Some(TypeError::MisMatch("Expected type Bool".to_string()))
+                    } else {
+                        None
                     }
-                };
+                })
+                .or_else(|| {
+                    let true_type = match get_type(*true_expr, env) {
+                        Some(t) => t,
+                        None => {
+                            return Some(TypeError::MisMatch(
+                                "Could not determine type for true branch".to_string(),
+                            ));
+                        }
+                    };
 
-                let false_type = match get_type(*false_expr, env) {
-                    Some(t) => t,
-                    None => {
-                        return Some(TypeError::MisMatch(
-                            "Could not determine type for false branch".to_string(),
-                        ));
+                    let false_type = match get_type(*false_expr, env) {
+                        Some(t) => t,
+                        None => {
+                            return Some(TypeError::MisMatch(
+                                "Could not determine type for false branch".to_string(),
+                            ));
+                        }
+                    };
+
+                    if true_type != false_type {
+                        Some(TypeError::MisMatch(
+                            "true and false branches must evaluate to the same type".to_string(),
+                        ))
+                    } else {
+                        None
                     }
+                }),
+        Expr::Lit(_) => None,
+        Expr::BinOp(op, left, right) => {
+                let expected = match op {
+                    Op::Add | Op::Subtract => Type::Int,
+                    Op::And | Op::Or => Type::Bool,
                 };
+                let left_type = get_type(*left, env)?;
+                let right_type = get_type(*right, env)?;
 
-                if true_type != false_type {
+                if left_type != expected || right_type != expected {
                     Some(TypeError::MisMatch(
-                        "true and false branches must evaluate to the same type".to_string(),
+                        "Type mismatch in binary expression".to_string(),
                     ))
                 } else {
                     None
                 }
-            }),
-        Expr::Lit(_) => None, //
-        Expr::BinOp(op, left, right) => {
-            let expected = match op {
-                Op::Add | Op::Subtract => Type::Int,
-                Op::And | Op::Or => Type::Bool,
-            };
-            let left_type = get_type(*left, env)?;
-            let right_type = get_type(*right, env)?;
-
-            if left_type != expected || right_type != expected {
-                Some(TypeError::MisMatch(
-                    "Type mismatch in binary expression".to_string(),
-                ))
-            } else {
-                None
             }
-        }
+        Expr::Let(_, expr, expr1) => todo!(),
     }
 }
 
 fn get_type(expr: Expr, env: &mut TypeEnvironment) -> Option<Type> {
     match expr {
         Expr::Var(var_name) => env.get(&var_name).cloned(),
-        Expr::Lambda(_, type_ann, _body) => Some(type_ann.into()),
+        Expr::Lambda(_, type_ann, _body) => type_ann.map(|t| t.into()),
         Expr::App(_name, _arg) => todo!(),
         Expr::If(_cond, true_branch, _false_branch) => get_type(*true_branch, env),
         Expr::Lit(literal) => Some(match literal {
-            Literal::Int(_) => Type::Int,
-            Literal::Bool(_) => Type::Bool,
-        }),
+                Literal::Int(_) => Type::Int,
+                Literal::Bool(_) => Type::Bool,
+            }),
         Expr::BinOp(op, _, _) => Some(match op {
-            Op::Add | Op::Subtract => Type::Int,
-            Op::And | Op::Or => Type::Bool,
-        }),
+                Op::Add | Op::Subtract => Type::Int,
+                Op::And | Op::Or => Type::Bool,
+            }),
+        Expr::Let(_, expr, expr1) => todo!(),
     }
 }
 
@@ -233,7 +254,7 @@ mod tests {
         // \(x: Int) -> x + 5
         let expr = Expr::Lambda(
             "x".to_string(),
-            TypeAnn::Int,
+            Some(TypeAnn::Int),
             Box::new(Expr::BinOp(
                 Op::Add,
                 Box::new(Expr::Var("x".to_string())),
@@ -250,7 +271,7 @@ mod tests {
         // \(x: Int) -> x && True
         let expr = Expr::Lambda(
             "x".to_string(),
-            TypeAnn::Int,
+            Some(TypeAnn::Int),
             Box::new(Expr::BinOp(
                 Op::And,
                 Box::new(Expr::Var("x".to_string())),
@@ -267,10 +288,10 @@ mod tests {
         // \(x: Int) -> \(y: Int) -> x + y
         let expr = Expr::Lambda(
             "x".to_string(),
-            TypeAnn::Int,
+            Some(TypeAnn::Int),
             Box::new(Expr::Lambda(
                 "y".to_string(),
-                TypeAnn::Int,
+                Some(TypeAnn::Int),
                 Box::new(Expr::BinOp(
                     Op::Add,
                     Box::new(Expr::Var("x".to_string())),
