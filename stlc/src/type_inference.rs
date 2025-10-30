@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::parser::Expr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Type {
+pub enum Type {
     Int,
     Var(String),
     Bool,
@@ -11,10 +11,10 @@ enum Type {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Substitution(Vec<(Type, String)>);
+pub struct Substitution(Vec<(Type, String)>);
 
 #[derive(Debug, Clone)]
-struct TypeEnv {
+pub struct TypeEnv {
     map: HashMap<String, Type>,
     var_gen: FreshVarGen,
 }
@@ -78,7 +78,7 @@ impl TypeEnv {
     }
 }
 
-fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
+pub fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
     use Expr::*;
     match e {
         Var(name) => match te.get(&name) {
@@ -128,38 +128,26 @@ fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
         )),
         BinOp(op, e1, e2) => {
             // This needs to be thought out a bit more.
-            let (s1, t1) = w(*e1, te.clone())?;
-            let (s2, t2) = w(*e2, te.apply_sub(&s1))?;
-            let s3 = if let Some(s) = unify(s2.apply(t1.clone()), t2.clone()) {
-                s
-            } else {
-                return Err("Invalid".to_string());
-            };
 
-            //use crate::parser::Op::*;
-            //let inner_t = match op {
-            //    Add | Subtract => Type::Int,
-            //    And | Or => Type::Bool,
-            //};
+            // First lets get the type of e1 and e2
+            let (_ , t1)= w(*e1, te.clone())?;
+            let (_, t2) = w(*e2, te.clone())?;
 
-            //let add_t = Type::Arrow(
-            //    Box::new(inner_t.clone()),
-            //    Box::new(Type::Arrow(Box::new(inner_t.clone()), Box::new(inner_t.clone()))),
-            //);
-
-
-            // Require binary operations to have the same types
-            if t1 != t2 {
-                return Err("Invalid".to_string());
-            };
-
+            // Once we have this type we need both of these to unify with a type assocated with the
+            // operation.
             use crate::parser::Op::*;
-            let inner_t = match op {
+            let t_op = match op {
                 Add | Subtract => Type::Int,
                 And | Or => Type::Bool,
             };
+            let s11 = unify(t1.clone(), t_op.clone()).ok_or("Invalid")?;
+            let s22 = unify(s11.apply(t2.clone()), t_op.clone()).ok_or("Invalid")?;
 
-            todo!()
+            // If we get this far then we have substitutions that can get t1 and t2 to an int.
+            // Which is what we need? Maybe there is an edge case where this isn't possible without
+            // First having a substitution to make the type of e1 = type of e2?
+
+            Ok((s22, t_op))
         }
         Let(var_name, e1, e2) => {
             let sub_te = te.extend_fresh(&var_name);
@@ -236,8 +224,6 @@ fn unify(t1: Type, t2: Type) -> Option<Substitution> {
 
 #[cfg(test)]
 mod tests {
-    use crate::parser::{Literal, TypeAnn};
-
     use super::*;
 
     #[test]
@@ -426,239 +412,5 @@ mod tests {
         let arrow = Type::Arrow(Box::new(Type::Int), Box::new(Type::Bool));
         let result = unify(arrow, Type::Int);
         assert!(result.is_none());
-    }
-
-    #[test]
-    fn infer_identity_function() {
-        // \x -> x should infer a polymorphic type v0 -> v0
-        let expr = Expr::Lambda("x".to_string(), None, Box::new(Expr::Var("x".to_string())));
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_ok());
-        let (sub, inferred_type) = result.unwrap();
-        // Should be v0 -> v0 (arrow from fresh var to same var)
-        match inferred_type {
-            Type::Arrow(param, ret) => assert_eq!(param, ret),
-            _ => panic!("Expected arrow type"),
-        }
-    }
-
-    #[test]
-    fn infer_typed_lambda_application() {
-        // (\(x: Int) -> x) 5 should infer Int
-        let expr = Expr::App(
-            Box::new(Expr::Lambda(
-                "x".to_string(),
-                Some(TypeAnn::Int),
-                Box::new(Expr::Var("x".to_string())),
-            )),
-            Box::new(Expr::Lit(Literal::Int(5))),
-        );
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_ok());
-        let (_, inferred_type) = result.unwrap();
-        assert_eq!(inferred_type, Type::Int);
-    }
-
-    #[test]
-    fn infer_nested_lambda() {
-        // \x -> \y -> y should infer v0 -> v1 -> v1
-        let expr = Expr::Lambda(
-            "x".to_string(),
-            None,
-            Box::new(Expr::Lambda(
-                "y".to_string(),
-                None,
-                Box::new(Expr::Var("y".to_string())),
-            )),
-        );
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_ok());
-        let (_, inferred_type) = result.unwrap();
-        // Should be v0 -> (v1 -> v1)
-        match inferred_type {
-            Type::Arrow(_, inner) => match *inner {
-                Type::Arrow(p, r) => assert_eq!(p, r),
-                _ => panic!("Expected nested arrow"),
-            },
-            _ => panic!("Expected arrow type"),
-        }
-    }
-
-    #[test]
-    fn test_infer_simple_if_with_int_branches() {
-        // if True then 1 else 2 should infer Int
-        let expr = Expr::If(
-            Box::new(Expr::Lit(Literal::Bool(true))),
-            Box::new(Expr::Lit(Literal::Int(1))),
-            Box::new(Expr::Lit(Literal::Int(2))),
-        );
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_ok());
-        let (_, inferred_type) = result.unwrap();
-        assert_eq!(inferred_type, Type::Int);
-    }
-
-    #[test]
-    fn test_infer_if_with_bool_branches() {
-        // if True then True else False should infer Bool
-        let expr = Expr::If(
-            Box::new(Expr::Lit(Literal::Bool(true))),
-            Box::new(Expr::Lit(Literal::Bool(true))),
-            Box::new(Expr::Lit(Literal::Bool(false))),
-        );
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_ok());
-        let (_, inferred_type) = result.unwrap();
-        assert_eq!(inferred_type, Type::Bool);
-    }
-
-    #[test]
-    fn test_infer_if_with_type_mismatch() {
-        // if True then 1 else False should fail (cannot unify Int and Bool)
-        let expr = Expr::If(
-            Box::new(Expr::Lit(Literal::Bool(true))),
-            Box::new(Expr::Lit(Literal::Int(1))),
-            Box::new(Expr::Lit(Literal::Bool(false))),
-        );
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_infer_if_with_polymorphic_branches() {
-        // if True then (\x -> x) else (\y -> y) should infer v0 -> v0
-        let expr = Expr::If(
-            Box::new(Expr::Lit(Literal::Bool(true))),
-            Box::new(Expr::Lambda(
-                "x".to_string(),
-                None,
-                Box::new(Expr::Var("x".to_string())),
-            )),
-            Box::new(Expr::Lambda(
-                "y".to_string(),
-                None,
-                Box::new(Expr::Var("y".to_string())),
-            )),
-        );
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_ok());
-        let (_, inferred_type) = result.unwrap();
-        // Should be polymorphic: v0 -> v0 (or similar)
-        match inferred_type {
-            Type::Arrow(param, ret) => {
-                // Both parameter and return type should be the same type variable
-                assert_eq!(param, ret);
-            }
-            _ => panic!("Expected arrow type"),
-        }
-    }
-
-    #[test]
-    fn test_infer_simple_let_binding_with_int() {
-        // let x = 5 in x should infer Int
-        let expr = Expr::Let(
-            "x".to_string(),
-            Box::new(Expr::Lit(Literal::Int(5))),
-            Box::new(Expr::Var("x".to_string())),
-        );
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_ok());
-        let (_, inferred_type) = result.unwrap();
-        assert_eq!(inferred_type, Type::Int);
-    }
-
-    #[test]
-    fn test_infer_simple_let_binding_with_bool() {
-        // let b = True in b should infer Bool
-        let expr = Expr::Let(
-            "b".to_string(),
-            Box::new(Expr::Lit(Literal::Bool(true))),
-            Box::new(Expr::Var("b".to_string())),
-        );
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_ok());
-        let (_, inferred_type) = result.unwrap();
-        assert_eq!(inferred_type, Type::Bool);
-    }
-
-    #[test]
-    fn test_infer_let_binding_with_lambda() {
-        // let f = \x -> x in f 5 should infer Int
-        let expr = Expr::Let(
-            "f".to_string(),
-            Box::new(Expr::Lambda(
-                "x".to_string(),
-                Some(TypeAnn::Int),
-                Box::new(Expr::Var("x".to_string())),
-            )),
-            Box::new(Expr::App(
-                Box::new(Expr::Var("f".to_string())),
-                Box::new(Expr::Lit(Literal::Int(5))),
-            )),
-        );
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_ok());
-        let (_, inferred_type) = result.unwrap();
-        assert_eq!(inferred_type, Type::Int);
-    }
-
-    #[test]
-    fn test_infer_nested_let_bindings() {
-        // let x = 5 in let y = 10 in y should infer Int
-        let expr = Expr::Let(
-            "x".to_string(),
-            Box::new(Expr::Lit(Literal::Int(5))),
-            Box::new(Expr::Let(
-                "y".to_string(),
-                Box::new(Expr::Lit(Literal::Int(10))),
-                Box::new(Expr::Var("y".to_string())),
-            )),
-        );
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_ok());
-        let (_, inferred_type) = result.unwrap();
-        assert_eq!(inferred_type, Type::Int);
-    }
-
-    #[test]
-    fn test_infer_let_binding_with_shadowing() {
-        // let x = 5 in let x = True in x should infer Bool
-        let expr = Expr::Let(
-            "x".to_string(),
-            Box::new(Expr::Lit(Literal::Int(5))),
-            Box::new(Expr::Let(
-                "x".to_string(),
-                Box::new(Expr::Lit(Literal::Bool(true))),
-                Box::new(Expr::Var("x".to_string())),
-            )),
-        );
-        let env = TypeEnv::new();
-        let result = w(expr, env);
-
-        assert!(result.is_ok());
-        let (_, inferred_type) = result.unwrap();
-        assert_eq!(inferred_type, Type::Bool);
     }
 }
