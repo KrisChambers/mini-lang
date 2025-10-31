@@ -1,5 +1,5 @@
 use nom::{
-    branch::alt, bytes::complete::tag, character::complete::{alpha1, alphanumeric1, digit1, multispace0}, combinator::{map, not, opt, value}, multi::many0, sequence::{self, delimited, preceded, terminated}, IResult, Parser
+    branch::alt, bytes::complete::tag, character::complete::{alpha1, alphanumeric1, digit1, multispace0}, combinator::{map, not, opt, value}, multi::{many0, many1, separated_list1}, sequence::{self, delimited, preceded, terminated}, IResult, Parser
 };
 
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -248,15 +248,25 @@ pub fn parse_let_assignment(input: &str) -> IResult<&str, (String, Expr)> {
     nom::IResult::Ok((input, (var.to_string(), e1)))
 }
 
+pub fn parse_nested_let_assignment(input:&str) -> IResult<&str, Vec<(String, Expr)>> {
+    separated_list1(
+        preceded(opt_whitespace, tag(",")),
+        parse_let_assignment
+    ).parse(input)
+}
+
 pub fn parse_let_expr(input: &str) -> IResult<&str, Expr> {
     let (input, _) = parse_keyword("let")(input)?;
-    let (input, (var, e1)) = parse_let_assignment(input)?;
+    let (input, assignments) = parse_nested_let_assignment(input)?;
+
+    // let (input, (var, e1)) = parse_let_assignment(input)?;
     let (input, _) = preceded(opt_whitespace, tag("in")).parse(input)?;
     let (input, e2) = parse_expr(input)?;
 
     nom::IResult::Ok((
         input,
-        Expr::Let(var.to_string(), Box::new(e1.clone()), Box::new(e2.clone())),
+     assignments.iter().rev().fold(e2, |acc, (var, e)|
+        Expr::Let(var.clone(), Box::new(e.clone()), Box::new(acc.clone())))
     ))
 }
 
@@ -298,14 +308,61 @@ pub fn parse_application_expr(input: &str) -> IResult<&str, Expr> {
     map(many0(parse_atomic_term), |exprs| exprs.iter().fold(initial.clone(), |acc, arg|
         Expr::App(Box::new(acc), Box::new(arg.clone()))
     ) ).parse(input)
+}
 
+#[cfg(test)]
+mod test {
+    use super::*;
 
-    //map(
-    //    alt((
-    //        delimited(tag("("), parse_expr, tag(")")),
-    //        preceded(opt_whitespace, parse_expr),
-    //    )),
-    //    |x| Expr::App(Box::new(expr.clone()), Box::new(x)),
-    //)
-    //.parse(input)
+    #[test]
+    fn parsing_let_assignment_sugar() {
+        let input = "
+x = 2,
+y = 3
+".trim();
+
+        let (_, result) = parse_nested_let_assignment(input).unwrap();
+
+        assert_eq!(result.len(), 2);
+
+        assert_eq!(result[0], ("x".to_string(), Expr::Lit(Literal::Int(2))));
+        assert_eq!(result[1], ("y".to_string(), Expr::Lit(Literal::Int(3))));
+
+        let input = "x = 1";
+        let (_, result) = parse_nested_let_assignment(input).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], ("x".to_string(), Expr::Lit(Literal::Int(1))));
+
+    }
+
+    #[test]
+    fn parsing_sugared_let_expression() {
+        let input = "
+let
+    x = 2,
+    y = 3
+in
+    x + y
+
+".trim();
+        let (_, result) = parse_let_expr(input).unwrap();
+        let expected = Expr::Let(
+            "x".to_string(),
+            Box::new(Expr::Lit(Literal::Int(2))),
+            Box::new(
+                Expr::Let(
+                    "x".to_string(),
+                    Box::new(Expr::Lit(Literal::Int(3))),
+                    Box::new(Expr::BinOp(Op::Add,
+                        Box::new(Expr::Var("x".to_string())),
+                        Box::new(Expr::Var("y".to_string()))
+                    ))
+
+                ))
+        );
+
+        assert_eq!(result, expected);
+
+    }
 }
