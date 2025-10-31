@@ -11,6 +11,17 @@ pub enum Type {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeError {
+    Error(String),
+}
+
+pub fn infer_type(expr: &Expr) -> Result<Type, TypeError> {
+    w(expr.clone(), TypeEnv::new())
+        .map_err(TypeError::Error)
+        .map(|(_, t)| Ok(t))?
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Substitution(Vec<(Type, String)>);
 
 #[derive(Debug, Clone)]
@@ -130,7 +141,7 @@ pub fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
             // This needs to be thought out a bit more.
 
             // First lets get the type of e1 and e2
-            let (_ , t1)= w(*e1, te.clone())?;
+            let (_, t1) = w(*e1, te.clone())?;
             let (_, t2) = w(*e2, te.clone())?;
 
             // Once we have this type we need both of these to unify with a type assocated with the
@@ -163,7 +174,7 @@ pub fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
             let (s3, t2) = w(*e2, sub_te)?;
 
             Ok((s3.compose(&s2.compose(&s1)), t2.clone()))
-        },
+        }
     }
 }
 
@@ -412,5 +423,16 @@ mod tests {
         let arrow = Type::Arrow(Box::new(Type::Int), Box::new(Type::Bool));
         let result = unify(arrow, Type::Int);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn infer_identity() {
+        let e = Expr::Lambda("x".to_string(), None, Box::new(Expr::Var("x".to_string())));
+        let id = Type::Arrow(
+            Box::new(Type::Var("v0".to_string())),
+            Box::new(Type::Var("v0".to_string()))
+        );
+
+        assert_eq!(infer_type(&e), Ok(id));
     }
 }

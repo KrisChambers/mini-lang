@@ -1,4 +1,4 @@
-use stlc::parser::{Expr, Literal, Op, TypeAnn};
+use stlc::parser::{self as parser, Expr, Literal, Op, TypeAnn};
 
 #[test]
 fn parsing_complex_arrow() {
@@ -8,7 +8,10 @@ fn parsing_complex_arrow() {
     assert_eq!(
         actual,
         TypeAnn::Arrow(
-            Box::new(TypeAnn::Arrow(Box::new(TypeAnn::Int), Box::new(TypeAnn::Int))),
+            Box::new(TypeAnn::Arrow(
+                Box::new(TypeAnn::Int),
+                Box::new(TypeAnn::Int)
+            )),
             Box::new(TypeAnn::Int)
         )
     );
@@ -41,7 +44,7 @@ fn parsing_lambda_without_type_annotation() {
             Op::Add,
             Box::new(Expr::Var("x".to_string())),
             Box::new(Expr::Lit(Literal::Int(5))),
-        ))
+        )),
     );
 
     let (_, actual) = stlc::parser::parse_lambda(input).unwrap();
@@ -88,7 +91,10 @@ fn parse_multi_lambda() {
     let input = r"\(f: Int -> Int) -> \(x: Int) -> f x";
     let expected = Expr::Lambda(
         "f".to_string(),
-        Some(TypeAnn::Arrow(Box::new(TypeAnn::Int), Box::new(TypeAnn::Int))),
+        Some(TypeAnn::Arrow(
+            Box::new(TypeAnn::Int),
+            Box::new(TypeAnn::Int),
+        )),
         Box::new(Expr::Lambda(
             "x".to_string(),
             Some(TypeAnn::Int),
@@ -176,8 +182,8 @@ fn parse_right_associative_arrow_types() {
         Box::new(TypeAnn::Int),
         Box::new(TypeAnn::Arrow(
             Box::new(TypeAnn::Int),
-            Box::new(TypeAnn::Int)
-        ))
+            Box::new(TypeAnn::Int),
+        )),
     );
     let (_, actual) = stlc::parser::parse_type(input).unwrap();
     assert_eq!(actual, expected);
@@ -186,10 +192,7 @@ fn parse_right_associative_arrow_types() {
 #[test]
 fn parse_bool_to_bool_arrow() {
     let input = "Bool -> Bool";
-    let expected = TypeAnn::Arrow(
-        Box::new(TypeAnn::Bool),
-        Box::new(TypeAnn::Bool)
-    );
+    let expected = TypeAnn::Arrow(Box::new(TypeAnn::Bool), Box::new(TypeAnn::Bool));
     let (_, actual) = stlc::parser::parse_type(input).unwrap();
     assert_eq!(actual, expected);
 }
@@ -254,7 +257,10 @@ fn parse_lambda_with_function_type() {
     let input = r"\(f: Int -> Bool) -> f";
     let expected = Expr::Lambda(
         "f".to_string(),
-        Some(TypeAnn::Arrow(Box::new(TypeAnn::Int), Box::new(TypeAnn::Bool))),
+        Some(TypeAnn::Arrow(
+            Box::new(TypeAnn::Int),
+            Box::new(TypeAnn::Bool),
+        )),
         Box::new(Expr::Var("f".to_string())),
     );
     let (_, actual) = stlc::parser::parse_lambda(input).unwrap();
@@ -336,6 +342,48 @@ fn parse_simple_let_assignment() {
 }
 
 #[test]
+fn parse_fn_let_assignemnt() {
+    let input = r"x = \y -> y + 2";
+    let lambda = Expr::Lambda(
+        "y".to_string(),
+        None,
+        Box::new(Expr::BinOp(
+            Op::Add,
+            Box::new(Expr::Var("y".to_string())),
+            Box::new(Expr::Lit(Literal::Int(2))),
+        )),
+    );
+    let expected = ("x".to_string(), lambda);
+    let (_, actual) = stlc::parser::parse_let_assignment(input).unwrap();
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn parse_let_fn() {
+    let input = r"let x = \y -> y + 2 in x 3";
+
+    let expected = Expr::Let(
+        "x".to_string(),
+        Box::new(Expr::Lambda(
+            "y".to_string(),
+            None,
+            Box::new(Expr::BinOp(
+                Op::Add,
+                Box::new(Expr::Var("y".to_string())),
+                Box::new(Expr::Lit(Literal::Int(2))),
+            )),
+        )),
+        Box::new(Expr::App(
+            Box::new(Expr::Var("x".to_string())),
+            Box::new(Expr::Lit(Literal::Int(3))),
+        )),
+    );
+    let (_, actual) = stlc::parser::parse_let_expr(input).unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn parse_simple_let_expr() {
     let input = "let x = 5 in x + 2";
     let expected = Expr::Let(
@@ -345,6 +393,116 @@ fn parse_simple_let_expr() {
             Op::Add,
             Box::new(Expr::Var("x".to_string())),
             Box::new(Expr::Lit(Literal::Int(2))),
+        )),
+    );
+    let (_, actual) = stlc::parser::parse_let_expr(input).unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn parse_nested_let_expr() {
+    let input = "let x = 5 in let y = 2 in x + y";
+    let expected = Expr::Let(
+        "x".to_string(),
+        Box::new(Expr::Lit(Literal::Int(5))),
+        Box::new(Expr::Let(
+            "y".to_string(),
+            Box::new(Expr::Lit(Literal::Int(2))),
+            Box::new(Expr::BinOp(
+                Op::Add,
+                Box::new(Expr::Var("x".to_string())),
+                Box::new(Expr::Var("y".to_string())),
+            )),
+        )),
+    );
+    let (_, actual) = stlc::parser::parse_let_expr(input).unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn parse_multi_app() {
+    let input = "eval f 3".trim();
+
+    let expected = Expr::App(
+        Box::new(
+            Expr::App(
+                Box::new(Expr::Var("eval".to_string())),
+                Box::new(Expr::Var("f".to_string()))
+            )
+        ),
+        Box::new(Expr::Lit(Literal::Int(3)))
+    );
+
+    let (_, result) = parser::parse_application_expr(input).unwrap();
+    assert_eq!(result, expected);
+
+}
+
+#[test]
+fn parse_nested_let_expr_2() {
+    let input = r"
+let doStuff =
+    let hour = 2 in
+    let min = 3 in
+    let add = \x -> \y -> x + y in add hour min
+    in
+    doStuff
+"
+    .trim();
+
+    let expected = Expr::Let(
+        "doStuff".to_string(),
+        Box::new(Expr::Let(
+            "hour".to_string(),
+            Box::new(Expr::Lit(Literal::Int(2))),
+            Box::new(Expr::Let(
+                "min".to_string(),
+                Box::new(Expr::Lit(Literal::Int(3))),
+                Box::new(Expr::Let(
+                    "add".to_string(),
+                    Box::new(Expr::Lambda(
+                        "x".to_string(),
+                        None,
+                        Box::new(Expr::Lambda(
+                            "y".to_string(),
+                            None,
+                            Box::new(Expr::BinOp(
+                                Op::Add,
+                                Box::new(Expr::Var("x".to_string())),
+                                Box::new(Expr::Var("y".to_string())),
+                            )),
+                        )),
+                    )),
+                    Box::new(Expr::App(
+                        Box::new(Expr::App(
+                            Box::new(Expr::Var("add".to_string())),
+                            Box::new(Expr::Var("hour".to_string()))
+                        )),
+                        Box::new(Expr::Var("min".to_string()))
+                    )),
+                )),
+            ))
+        )),
+        Box::new(Expr::Var("doStuff".to_string())),
+    );
+
+    let (_, actual) = parser::parse_let_expr(input).unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn parse_let_with_lambda_and_application() {
+    let input = r"let id = \x -> x in id 5";
+    let expected = Expr::Let(
+        "id".to_string(),
+        Box::new(Expr::Lambda(
+            "x".to_string(),
+            None,
+            Box::new(Expr::Var("x".to_string())),
+        )),
+        Box::new(Expr::App(
+            Box::new(Expr::Var("id".to_string())),
+            Box::new(Expr::Lit(Literal::Int(5))),
         )),
     );
     let (_, actual) = stlc::parser::parse_let_expr(input).unwrap();

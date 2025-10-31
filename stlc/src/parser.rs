@@ -1,10 +1,5 @@
 use nom::{
-    IResult, Parser,
-    branch::alt,
-    bytes::complete::tag,
-    character::complete::{alpha1, alphanumeric1, digit1, multispace0},
-    combinator::{map, not, opt, value},
-    sequence::{self, delimited, preceded, terminated},
+    branch::alt, bytes::complete::tag, character::complete::{alpha1, alphanumeric1, digit1, multispace0}, combinator::{map, not, opt, value}, multi::many0, sequence::{self, delimited, preceded, terminated}, IResult, Parser
 };
 
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -15,7 +10,7 @@ pub enum Expr {
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Lit(Literal),
     BinOp(Op, Box<Expr>, Box<Expr>),
-    Let(String, Box<Expr>, Box<Expr>)
+    Let(String, Box<Expr>, Box<Expr>),
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -39,10 +34,19 @@ pub enum Op {
     Or,
 }
 
-//pub fn parse(input: &str) -> IResult<&str, Vec<Expr>> {
-//    Ok(vec![Expr::Var("Blah".to_string())])
-//}
-//
+pub fn parse(mut input: &str) -> IResult<&str, Vec<Expr>> {
+    let mut result = vec![];
+
+    while !input.is_empty() {
+        let (i, expr) = parse_expr(input)?;
+
+        input = i;
+        result.push(expr)
+    }
+
+    nom::IResult::Ok((input, result))
+}
+
 fn parse_binary_op(input: &str) -> IResult<&str, Op> {
     delimited(
         opt_whitespace,
@@ -99,9 +103,10 @@ fn parse_literal_bool(input: &str) -> IResult<&str, Expr> {
 }
 
 fn parse_variable(input: &str) -> IResult<&str, Expr> {
-    map(delimited(opt_whitespace, alphanumeric1, opt_whitespace), |x| {
-        Expr::Var(x.to_string())
-    })
+    map(
+        delimited(opt_whitespace, alphanumeric1, opt_whitespace),
+        |x| Expr::Var(x.to_string()),
+    )
     .parse(input)
 }
 
@@ -112,7 +117,11 @@ fn keyword(input: &str) -> IResult<&str, &str> {
 pub fn parse_literal(input: &str) -> IResult<&str, Expr> {
     preceded(
         not(keyword),
-        delimited(opt_whitespace,alt((parse_literal_bool, parse_literal_int, parse_variable)), opt_whitespace),
+        delimited(
+            opt_whitespace,
+            alt((parse_literal_bool, parse_literal_int, parse_variable)),
+            opt_whitespace,
+        ),
     )
     .parse(input)
 }
@@ -132,13 +141,13 @@ pub fn parse_literal(input: &str) -> IResult<&str, Expr> {
 * Almost anything can be an application ...
 */
 
-
 pub fn parse_expr(input: &str) -> IResult<&str, Expr> {
     alt((
+        parse_let_expr,
         parse_if_expr,
         parse_lambda,
-        parse_application_expr,
         parse_binary_expr,
+        parse_application_expr,
         parse_literal,
     ))
     .parse(input)
@@ -148,10 +157,16 @@ pub fn parse_lambda(input: &str) -> IResult<&str, Expr> {
     // \(x:Int) -> x + 5
     // \x -> x + 5
 
+    let (input, _) = opt_whitespace(input)?;
+
     let (input, (param, tparam)) = alt((
-        map(delimited(tag(r"\("), parse_lambda_parameter, tag(")")), |(p, t)| (p, Some(t))),
-        map(preceded(tag(r"\"), alpha1), |x: &str| (x.to_string(), None))
-    )).parse(input)?;
+        map(
+            delimited(tag(r"\("), parse_lambda_parameter, tag(")")),
+            |(p, t)| (p, Some(t)),
+        ),
+        map(preceded(tag(r"\"), alpha1), |x: &str| (x.to_string(), None)),
+    ))
+    .parse(input)?;
 
     let (input, _) = parse_arrow(input)?;
 
@@ -225,13 +240,12 @@ fn parse_keyword(keyword: &str) -> impl Fn(&str) -> IResult<&str, &str> {
     }
 }
 
-pub fn parse_let_assignment(input:&str) -> IResult<&str, (String, Expr)> {
-    let (input, var) = preceded(opt_whitespace, alpha1).parse(input)?;
+pub fn parse_let_assignment(input: &str) -> IResult<&str, (String, Expr)> {
+    let (input, var) = preceded(opt_whitespace, alphanumeric1).parse(input)?;
     let (input, _) = preceded(opt_whitespace, tag("=")).parse(input)?;
     let (input, e1) = parse_expr(input)?;
 
     nom::IResult::Ok((input, (var.to_string(), e1)))
-
 }
 
 pub fn parse_let_expr(input: &str) -> IResult<&str, Expr> {
@@ -240,11 +254,10 @@ pub fn parse_let_expr(input: &str) -> IResult<&str, Expr> {
     let (input, _) = preceded(opt_whitespace, tag("in")).parse(input)?;
     let (input, e2) = parse_expr(input)?;
 
-    nom::IResult::Ok((input, Expr::Let(
-        var.to_string(),
-        Box::new(e1.clone()),
-        Box::new(e2.clone())
-    )))
+    nom::IResult::Ok((
+        input,
+        Expr::Let(var.to_string(), Box::new(e1.clone()), Box::new(e2.clone())),
+    ))
 }
 
 pub fn parse_if_expr(input: &str) -> IResult<&str, Expr> {
@@ -265,25 +278,34 @@ pub fn parse_if_expr(input: &str) -> IResult<&str, Expr> {
 
 pub fn parse_application_expr(input: &str) -> IResult<&str, Expr> {
     /*
-     * "(\(x: Int) -> x + 2) 5
+     * (\(x: Int) -> x + 2) 5
      * add2 5
      * 5 + add2 5
      * isTrue true
+     * add 2 5 == (add 2) 5
      * */
-    let (input, expr) = alt((
+    let mut parse_atomic_term = preceded(opt_whitespace,alt((
         // Either (<lambda_definition>) ...
-        delimited(tag("("), parse_lambda, tag(")")),
+        delimited(tag("("), parse_expr, tag(")")),
+        // add x y = (add x) y
+        //parse_application_expr,
         // or a named lambda ex: add2 5
-        parse_literal
-    ))
-    .parse(input)?;
+        parse_literal,
+    )));
 
-    map(
-        alt((
-            delimited(tag("("), parse_expr, tag(")")),
-            preceded(opt_whitespace, parse_expr),
-        )),
-        |x| Expr::App(Box::new(expr.clone()), Box::new(x)),
-    )
-    .parse(input)
+    let (input, initial) = parse_atomic_term.parse(input)?;
+
+    map(many0(parse_atomic_term), |exprs| exprs.iter().fold(initial.clone(), |acc, arg|
+        Expr::App(Box::new(acc), Box::new(arg.clone()))
+    ) ).parse(input)
+
+
+    //map(
+    //    alt((
+    //        delimited(tag("("), parse_expr, tag(")")),
+    //        preceded(opt_whitespace, parse_expr),
+    //    )),
+    //    |x| Expr::App(Box::new(expr.clone()), Box::new(x)),
+    //)
+    //.parse(input)
 }
