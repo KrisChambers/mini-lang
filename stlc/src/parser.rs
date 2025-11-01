@@ -352,7 +352,7 @@ in
             Box::new(Expr::Lit(Literal::Int(2))),
             Box::new(
                 Expr::Let(
-                    "x".to_string(),
+                    "y".to_string(),
                     Box::new(Expr::Lit(Literal::Int(3))),
                     Box::new(Expr::BinOp(Op::Add,
                         Box::new(Expr::Var("x".to_string())),
