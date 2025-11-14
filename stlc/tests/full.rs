@@ -2,6 +2,19 @@ use stlc::parser::{Expr, Literal, Op, parse, parse_program};
 use stlc::type_inference::{Type, infer_type};
 
 #[test]
+fn binary_desugar() {
+    let input = r"
+let x = 3 + 2 + 4
+".trim();
+
+
+    let (_, result) = parse_program(input).unwrap();
+    let t = infer_type(&result).unwrap();
+
+    assert_eq!(t, Type::Int);
+}
+
+#[test]
 fn simple_program() {
     let input = r"
 let x = 3 in
