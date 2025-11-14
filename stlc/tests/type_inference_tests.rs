@@ -9,7 +9,7 @@ fn infer_identity_function() {
     let result = w(expr, env);
 
     assert!(result.is_ok());
-    let (sub, inferred_type) = result.unwrap();
+    let (_, inferred_type) = result.unwrap();
     // Should be v0 -> v0 (arrow from fresh var to same var)
     match inferred_type {
         Type::Arrow(param, ret) => assert_eq!(param, ret),

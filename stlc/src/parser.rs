@@ -1,5 +1,5 @@
 use nom::{
-    branch::alt, bytes::complete::tag, character::complete::{alpha1, alphanumeric1, digit1, multispace0}, combinator::{map, not, opt, value}, multi::{many0, many1, separated_list1}, sequence::{self, delimited, preceded, terminated}, IResult, Parser
+    branch::alt, bytes::complete::tag, character::complete::{alpha1, alphanumeric1, digit1, multispace0, multispace1}, combinator::{eof, map, not, opt, peek, value}, multi::{many0, many1, separated_list1}, sequence::{self, delimited, preceded, terminated, tuple}, IResult, Parser
 };
 
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -32,6 +32,70 @@ pub enum Op {
     Subtract,
     And,
     Or,
+}
+
+fn newline(input:&str) -> IResult<&str, ()> {
+    value((), tag("\n")).parse(input)
+}
+fn semicolon(input:&str) -> IResult<&str, ()> {
+    value((), tag(";")).parse(input)
+}
+
+fn opt_spaces(input:&str) -> IResult<&str, ()> {
+    value((), many0(
+        alt((
+            tag(" "),
+            tag(r"\t")
+        ))
+    )).parse(input)
+}
+
+fn parse_definition_delimiter(input:&str) -> IResult<&str, ()> {
+    alt((
+        value((), (newline, opt_spaces, newline)),
+        value((), semicolon)
+    )).parse(input)
+}
+
+fn parse_top_level_let(input: &str) -> IResult<&str, Expr> {
+    let (input, _) = value((), (opt_whitespace, tag("let"), opt_whitespace)).parse(input)?;
+    let (input, (name, e)) = parse_let_assignment(input)?;
+
+    nom::IResult::Ok((
+        input,
+        Expr::Let(
+            name.clone(),
+            Box::new(e.clone()),
+            Box::new(Expr::Var(name.clone())),
+        ),
+    ))
+}
+
+
+pub fn parse_program(input: &str) -> IResult<&str, Expr> {
+    let (input, lets) = separated_list1(
+        parse_definition_delimiter,
+        parse_top_level_let
+    ).parse(input)?;
+
+    let assignments: Vec<(String, Expr)> = lets.into_iter().map(|expr| {
+        match expr {
+            Expr::Let(name, value, _) => (name, *value),
+            _ => panic!("Expected Let expression from parse_top_level_let"),
+        }
+    }).collect();
+
+    let last_var = assignments.last().map(|(name, _)| name.clone())
+        .expect("Expected at least one definition");
+
+    let result = assignments.iter().rev().fold(
+        Expr::Var(last_var),
+        |acc, (name, expr)| {
+            Expr::Let(name.clone(), Box::new(expr.clone()), Box::new(acc))
+        }
+    );
+
+    Ok((input, result))
 }
 
 pub fn parse(mut input: &str) -> IResult<&str, Vec<Expr>> {
@@ -104,25 +168,32 @@ fn parse_literal_bool(input: &str) -> IResult<&str, Expr> {
 
 fn parse_variable(input: &str) -> IResult<&str, Expr> {
     map(
-        delimited(opt_whitespace, alphanumeric1, opt_whitespace),
-        |x| Expr::Var(x.to_string()),
+        (opt_whitespace, alphanumeric1),
+        |(_, x)| Expr::Var(x.to_string()),
     )
     .parse(input)
 }
 
 fn keyword(input: &str) -> IResult<&str, &str> {
-    alt((tag("if"), tag("else"), tag("then"), tag("let"), tag("in"))).parse(input)
+    preceded(
+        opt_whitespace,
+        terminated(alt((tag("if"), tag("else"), tag("then"), tag("let"), tag("in"))),
+            peek(alt((
+                value((), multispace1),
+                value((), eof)
+            )))
+        ),
+    )
+    .parse(input)
 }
 
 pub fn parse_literal(input: &str) -> IResult<&str, Expr> {
-    preceded(
-        not(keyword),
-        delimited(
-            opt_whitespace,
-            alt((parse_literal_bool, parse_literal_int, parse_variable)),
-            opt_whitespace,
-        ),
-    )
+    map(
+(not(keyword), opt_whitespace, alt((
+            parse_literal_bool,
+            parse_literal_int,
+            parse_variable
+        ))), |(_, _, x)| x.clone())
     .parse(input)
 }
 
@@ -248,11 +319,8 @@ pub fn parse_let_assignment(input: &str) -> IResult<&str, (String, Expr)> {
     nom::IResult::Ok((input, (var.to_string(), e1)))
 }
 
-pub fn parse_nested_let_assignment(input:&str) -> IResult<&str, Vec<(String, Expr)>> {
-    separated_list1(
-        preceded(opt_whitespace, tag(",")),
-        parse_let_assignment
-    ).parse(input)
+pub fn parse_nested_let_assignment(input: &str) -> IResult<&str, Vec<(String, Expr)>> {
+    separated_list1(preceded(opt_whitespace, tag(",")), parse_let_assignment).parse(input)
 }
 
 pub fn parse_let_expr(input: &str) -> IResult<&str, Expr> {
@@ -265,8 +333,9 @@ pub fn parse_let_expr(input: &str) -> IResult<&str, Expr> {
 
     nom::IResult::Ok((
         input,
-     assignments.iter().rev().fold(e2, |acc, (var, e)|
-        Expr::Let(var.clone(), Box::new(e.clone()), Box::new(acc.clone())))
+        assignments.iter().rev().fold(e2, |acc, (var, e)| {
+            Expr::Let(var.clone(), Box::new(e.clone()), Box::new(acc.clone()))
+        }),
     ))
 }
 
@@ -286,6 +355,20 @@ pub fn parse_if_expr(input: &str) -> IResult<&str, Expr> {
     .parse(input)
 }
 
+fn parse_atomic_term(input: &str) -> IResult<&str, Expr> {
+    preceded(
+        opt_whitespace,
+        alt((
+            // Either (<lambda_definition>) ...
+            delimited(tag("("), parse_expr, tag(")")),
+            // add x y = (add x) y
+            //parse_application_expr,
+            // or a named lambda ex: add2 5
+            parse_literal,
+        )),
+    ).parse(input)
+}
+
 pub fn parse_application_expr(input: &str) -> IResult<&str, Expr> {
     /*
      * (\(x: Int) -> x + 2) 5
@@ -294,20 +377,14 @@ pub fn parse_application_expr(input: &str) -> IResult<&str, Expr> {
      * isTrue true
      * add 2 5 == (add 2) 5
      * */
-    let mut parse_atomic_term = preceded(opt_whitespace,alt((
-        // Either (<lambda_definition>) ...
-        delimited(tag("("), parse_expr, tag(")")),
-        // add x y = (add x) y
-        //parse_application_expr,
-        // or a named lambda ex: add2 5
-        parse_literal,
-    )));
+    let (input, initial) = parse_atomic_term(input)?;
 
-    let (input, initial) = parse_atomic_term.parse(input)?;
-
-    map(many0(parse_atomic_term), |exprs| exprs.iter().fold(initial.clone(), |acc, arg|
-        Expr::App(Box::new(acc), Box::new(arg.clone()))
-    ) ).parse(input)
+    map(many0(parse_atomic_term), |exprs| {
+        exprs.iter().fold(initial.clone(), |acc, arg| {
+            Expr::App(Box::new(acc), Box::new(arg.clone()))
+        })
+    })
+    .parse(input)
 }
 
 #[cfg(test)]
@@ -319,7 +396,8 @@ mod test {
         let input = "
 x = 2,
 y = 3
-".trim();
+"
+        .trim();
 
         let (_, result) = parse_nested_let_assignment(input).unwrap();
 
@@ -333,7 +411,6 @@ y = 3
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], ("x".to_string(), Expr::Lit(Literal::Int(1))));
-
     }
 
     #[test]
@@ -345,24 +422,192 @@ let
 in
     x + y
 
-".trim();
+"
+        .trim();
         let (_, result) = parse_let_expr(input).unwrap();
         let expected = Expr::Let(
             "x".to_string(),
             Box::new(Expr::Lit(Literal::Int(2))),
-            Box::new(
-                Expr::Let(
-                    "y".to_string(),
-                    Box::new(Expr::Lit(Literal::Int(3))),
-                    Box::new(Expr::BinOp(Op::Add,
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Var("y".to_string()))
-                    ))
-
-                ))
+            Box::new(Expr::Let(
+                "y".to_string(),
+                Box::new(Expr::Lit(Literal::Int(3))),
+                Box::new(Expr::BinOp(
+                    Op::Add,
+                    Box::new(Expr::Var("x".to_string())),
+                    Box::new(Expr::Var("y".to_string())),
+                )),
+            )),
         );
 
         assert_eq!(result, expected);
+    }
 
+    #[test]
+    fn test_parse_definition_delimiter_semicolon() {
+        let input = ";";
+        let result = parse_definition_delimiter(input);
+        assert_eq!(result, Ok(("", ())));
+    }
+
+    #[test]
+    fn test_parse_definition_delimiter_double_newline() {
+        // Test simple double newline
+        let input1 = "\n\n";
+        let result1 = parse_definition_delimiter(input1);
+        assert_eq!(result1, Ok(("", ())));
+
+        // Test double newline with whitespace between
+        let input2 = "\n  \n";
+        let result2 = parse_definition_delimiter(input2);
+        assert_eq!(result2, Ok(("", ())));
+    }
+
+    #[test]
+    fn test_parse_top_level_let_with_delimiter() {
+        // Test with semicolon
+        let input1 = "let x = 5";
+        let (remaining1, expr1) = parse_top_level_let(input1).unwrap();
+        assert_eq!(remaining1, "");
+        assert_eq!(
+            expr1,
+            Expr::Let(
+                "x".to_string(),
+                Box::new(Expr::Lit(Literal::Int(5))),
+                Box::new(Expr::Var("x".to_string()))
+            )
+        );
+
+        // Test with double newline
+        let input2 = "let y = True";
+        let (remaining2, expr2) = parse_top_level_let(input2).unwrap();
+        assert_eq!(remaining2, "");
+        assert_eq!(
+            expr2,
+            Expr::Let(
+                "y".to_string(),
+                Box::new(Expr::Lit(Literal::Bool(true))),
+                Box::new(Expr::Var("y".to_string()))
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_top_level_let_requires_let_keyword() {
+        let input = "x = 5;";
+        let result = parse_top_level_let(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_program_multiple_definitions() {
+        let input = r"
+let a = 1;
+let b = 2
+
+let c = 3".trim();
+
+        let (remaining, expr) = parse_program(input).unwrap();
+        assert_eq!(remaining, "");
+
+        // Should create a nested let expression:
+        // Let("a", 1, Let("b", 2, Let("c", 3, Var("c"))))
+        let expected = Expr::Let(
+            "a".to_string(),
+            Box::new(Expr::Lit(Literal::Int(1))),
+            Box::new(Expr::Let(
+                "b".to_string(),
+                Box::new(Expr::Lit(Literal::Int(2))),
+                Box::new(Expr::Let(
+                    "c".to_string(),
+                    Box::new(Expr::Lit(Literal::Int(3))),
+                    Box::new(Expr::Var("c".to_string()))
+                ))
+            ))
+        );
+
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_parse_atomic_term_debug() {
+        // Test parsing a single atomic term
+        let result1 = parse_atomic_term("inc");
+        println!("parse_atomic_term('inc'): {:?}", result1);
+
+        let result2 = parse_atomic_term(" inc");
+        println!("parse_atomic_term(' inc'): {:?}", result2);
+
+        // Test parsing with parse_literal directly
+        let result3 = parse_literal("inc");
+        println!("parse_literal('inc'): {:?}", result3);
+    }
+
+    #[test]
+    fn test_parse_simple_application() {
+        let input = "compose inc inc";
+        let result = parse_expr(input);
+        println!("Parsing '{}'", input);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok());
+        let (remaining, expr) = result.unwrap();
+        println!("Remaining: '{}'", remaining);
+        println!("Expr: {:?}", expr);
+
+        // Should parse as App(App(Var("compose"), Var("inc")), Var("inc"))
+        match expr {
+            Expr::App(_, _) => {},
+            _ => panic!("Expected application expression, got {:?}", expr)
+        }
+    }
+
+    #[test]
+    fn test_parse_five_statements() {
+        let input = r"
+let compose = \f -> \g -> \x -> f (g x)
+
+let inc = \n -> n + 1
+
+let not = \b -> if b then False else True
+
+let f = compose inc inc
+
+let g = compose not not
+    "
+        .trim();
+
+        let (remaining, expr) = parse_program(input).unwrap();
+        assert_eq!(remaining, "");
+
+        // Should be: Let(compose, ..., Let(inc, ..., Let(not, ..., Let(f, ..., Let(g, ..., Var(g))))))
+        if let Expr::Let(name1, _, body1) = expr {
+            assert_eq!(name1, "compose");
+            if let Expr::Let(name2, _, body2) = *body1 {
+                assert_eq!(name2, "inc");
+                if let Expr::Let(name3, _, body3) = *body2 {
+                    assert_eq!(name3, "not");
+                    if let Expr::Let(name4, _, body4) = *body3 {
+                        assert_eq!(name4, "f");
+                        if let Expr::Let(name5, _, body5) = *body4 {
+                            assert_eq!(name5, "g");
+                            if let Expr::Var(final_var) = *body5 {
+                                assert_eq!(final_var, "g");
+                            } else {
+                                panic!("Expected Var(g)");
+                            }
+                        } else {
+                            panic!("Expected Let(g, ...)");
+                        }
+                    } else {
+                        panic!("Expected Let(f, ...)");
+                    }
+                } else {
+                    panic!("Expected Let(not, ...)");
+                }
+            } else {
+                panic!("Expected Let(inc, ...)");
+            }
+        } else {
+            panic!("Expected Let(compose, ...)");
+        }
     }
 }

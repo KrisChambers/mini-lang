@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::{HashMap, HashSet}, rc::Rc};
 
 use crate::parser::Expr;
 
@@ -8,7 +8,11 @@ pub enum Type {
     Var(String),
     Bool,
     Arrow(Box<Type>, Box<Type>),
+    // Represents something like forall a. a -> a
+    Scheme(HashSet<String>, Box<Type>),
 }
+
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeError {
@@ -21,25 +25,33 @@ pub fn infer_type(expr: &Expr) -> Result<Type, TypeError> {
         .map(|(_, t)| Ok(t))?
 }
 
+/// A substitution [ t -> v ] replaces v with t in a term
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Substitution(Vec<(Type, String)>);
 
-#[derive(Debug, Clone)]
-pub struct TypeEnv {
-    map: HashMap<String, Type>,
-    var_gen: FreshVarGen,
-}
-
 /// Generates fresh Type::Var
 #[derive(Debug, Clone)]
-struct FreshVarGen(usize);
+struct FreshVarNameGen(usize);
 
-impl FreshVarGen {
-    pub fn next(&mut self) -> Type {
+impl FreshVarNameGen {
+    pub fn next(&mut self) -> String {
         let next_idx = self.0;
         self.0 += 1;
 
-        Type::Var(format!("v{}", next_idx))
+        format!("v{}", next_idx)
+    }
+}
+
+/// The Type Environment
+#[derive(Debug, Clone)]
+pub struct TypeEnv {
+    map: HashMap<String, Type>,
+    var_gen: Rc<RefCell<FreshVarNameGen>>,
+}
+
+impl Default for TypeEnv {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -47,12 +59,26 @@ impl TypeEnv {
     pub fn new() -> Self {
         TypeEnv {
             map: HashMap::new(),
-            var_gen: FreshVarGen(0),
+            var_gen: Rc::new(RefCell::new(FreshVarNameGen(0))),
         }
     }
 
     fn get(&self, name: &str) -> Option<Type> {
         self.map.get(name).cloned()
+    }
+
+    /// Get all the type variables defined in the environment
+    fn type_vars(&self) -> Vec<&String> {
+        let mut v = vec![];
+
+        for value in self.map.values() {
+            match value {
+                Type::Var(name) => v.push(name),
+                _ => continue,
+            }
+        }
+
+        v
     }
 
     fn append(&self, name: &str, t: &Type) -> TypeEnv {
@@ -65,10 +91,10 @@ impl TypeEnv {
         }
     }
 
-    fn extend_fresh(&mut self, name: &str) -> TypeEnv {
-        let fresh = self.var_gen.next();
+    fn extend_fresh(&self, name: &str) -> TypeEnv {
+        let fresh = self.var_gen.borrow_mut().next();
 
-        self.append(name, &fresh)
+        self.append(name, &Type::Var(fresh))
     }
 
     fn apply_sub(&self, sub: &Substitution) -> TypeEnv {
@@ -84,8 +110,8 @@ impl TypeEnv {
         }
     }
 
-    fn get_fresh_var(&mut self) -> Type {
-        self.var_gen.next()
+    fn get_fresh_var(&self) -> String {
+        self.var_gen.borrow_mut().next()
     }
 }
 
@@ -94,17 +120,27 @@ pub fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
     match e {
         Var(name) => match te.get(&name) {
             Some(t) => Ok((Substitution::id(), t)),
-            None => Err("Invalid".to_string()),
+            None => Err(format!("Could not find variable '{name}'")),
         },
         App(e1, e2) => {
-            let (s1, t1) = w(*e1, te.clone())?;
-            let (s2, t2) = w(*e2, te.apply_sub(&s1))?;
+            let (s1, t1) = w(*e1.clone(), te.clone())?;
+            println!("app func {e1:?} : {t1:?}");
+            let (s2, t2) = w(*e2.clone(), te.apply_sub(&s1))?;
+            println!("app arg  {e2:?} : {t2:?}");
             let u = te.get_fresh_var();
-            let t = Type::Arrow(Box::new(t2), Box::new(u.clone()));
-            if let Some(s3) = unify(s2.apply(t1), t.clone()) {
-                Ok((s3.compose(&s2).compose(&s1), s3.apply(u.clone())))
+            let t = Type::Arrow(Box::new(t2), Box::new(Type::Var(u.clone())));
+            let t1 = instantiate(&t1, &mut te);
+            println!("unify {t1:?} and {t:?}");
+            //println!("s2 {s2:?}");
+            //println!("s1 {s1:?}");
+            if let Some(s3) = unify(s2.apply(t1.clone()), t.clone()) {
+                let s = s3.compose(&s2).compose(&s1);
+                println!("sub {s3:?}");
+                let t = s.apply(Type::Var(u));
+                //println!("final T = {t:?}");
+                Ok((s.clone(), t))
             } else {
-                Err("Invalid".to_string())
+                Err(format!("Could not unify {t1:?} of {e1:?} with {t:?}"))
             }
         }
         Lambda(var_name, _type_ann, expr) => {
@@ -117,17 +153,25 @@ pub fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
             Ok((s1, t))
         }
         If(cond, t_e, f_e) => {
-            let (_, tc) = w(*cond, te.clone())?;
+            let (s0, tc) = w(*cond, te.clone())?;
 
-            if tc != Type::Bool {
-                return Err("Invalid condition".to_string());
-            };
+            // Make sure that the type of the conditional can be unified to Bool
+            let s1 =
+                unify(tc.clone(), Type::Bool).ok_or("Type of Conditional must unify to Bool")?;
 
-            let (s1, t1) = w(*t_e, te.clone())?;
-            let (s2, t2) = w(*f_e, te.apply_sub(&s1))?;
-            match unify(s2.apply(t1), t2.clone()) {
-                Some(s) => Ok((s.compose(&s2).compose(&s1), t2.clone())),
-                None => Err("Invalid".to_string()),
+            let (s2, t1) = w(*t_e, te.apply_sub(&s1))?;
+            let (s3, t2) = w(*f_e, te.clone())?;
+
+            if let Some(s4) = unify(s3.apply(t1), s3.apply(t2.clone())) {
+                let s = s4
+                    .compose(&s3)
+                    .compose(&s2)
+                    .compose(&s1)
+                    .compose(&s0);
+
+                Ok((s, s4.apply(t2.clone())))
+            } else {
+                Err("Invalid If type".to_string())
             }
         }
         Lit(literal) => Ok((
@@ -141,8 +185,11 @@ pub fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
             // This needs to be thought out a bit more.
 
             // First lets get the type of e1 and e2
-            let (_, t1) = w(*e1, te.clone())?;
-            let (_, t2) = w(*e2, te.clone())?;
+            let (_, t1) = w(*e1.clone(), te.clone())?;
+            let (_, t2) = w(*e2.clone(), te.clone())?;
+
+            println!("{e1:?} : {t1:?}");
+            println!("{e2:?} : {t2:?}");
 
             // Once we have this type we need both of these to unify with a type assocated with the
             // operation.
@@ -158,30 +205,117 @@ pub fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
             // Which is what we need? Maybe there is an edge case where this isn't possible without
             // First having a substitution to make the type of e1 = type of e2?
 
-            Ok((s22, t_op))
+            Ok((s22.compose(&s11), t_op))
         }
         Let(var_name, e1, e2) => {
+            //println!("");
+            // TODO(kc):
+            // We need to implement the generalization and instantiation
+            // id = \x -> x Should be typed as forall a. a -> a
+            // When we want to do something like id 5.
+            // We first look up the type of id.
+            //   Then we instantiate it with a fresh type variable
+            //      This gives us a type b -> b
+            //          We then unify this type with type of 5
+            //      Same goes for id True
+            //
+            //      We are not properly handling the generalization / instantiation of types
+
+            // First we assign a type to the variable `var_name`
+
+            // let x = e1 in e2
+
+            //1. Create a fresh type variable for x
             let sub_te = te.extend_fresh(&var_name);
             let a = sub_te.get(&var_name).unwrap();
-            let (s1, t1) = w(*e1, sub_te)?;
-            let s2 = if let Some(s) = unify(s1.apply(a), t1.clone()) {
-                s
-            } else {
-                return Err("Invalid".to_string());
-            };
+            println!("{var_name:?} : {a:?}");
+
+            // Next we infer the type of e1 and then unify with var_name
+            // I think it is here that we want to create a TypeScheme.
+            // TODO (kc): GO through some pen and pencil examples for this.
+
+            // The type here should always end up being a type scheme (maybe w should always return a type
+            // scheme?)
+
+            //2. Calculate the type of e1 to get t1 and s1
+            let (s1, t1) = w(*e1.clone(), sub_te.clone())?;
+            let t1 = generalize(&t1, &te);
+            println!("{e1:?} : {t1:?}");
+
+            //3. Unify t1 and `a` to get s2, this should give us a substitution for the most general t1
+            let s2 = unify(s1.apply(a), t1.clone()).ok_or("Invalid".to_string())?;
+            //println!("unify via {s2:?}");
+
 
             let sub_te = te.apply_sub(&s2.compose(&s1)).append(&var_name, &t1);
-            let (s3, t2) = w(*e2, sub_te)?;
+            //println!("sub_te :: {sub_te:?}");
+            let (s3, t2) = w(*e2, sub_te.clone())?;
 
             Ok((s3.compose(&s2.compose(&s1)), t2.clone()))
         }
     }
 }
 
+/// Return all free variables in the type.
+/// Anything that is defined inside the type environment is not considered a free variable.
+fn get_free_vars(t: &Type, env: &TypeEnv) -> HashSet<String> {
+    let bound_vars = env.type_vars();
+    match t {
+        Type::Var(name) => {
+            let v = vec![name.clone()];
+
+            v.into_iter().filter(|x| !bound_vars.contains(&x)).collect()
+        }
+        Type::Arrow(t1, t2) => {
+            let mut s: HashSet<String> = HashSet::new();
+            let free_vars = get_free_vars(t1, env)
+                .into_iter()
+                .chain(get_free_vars(t2, env));
+
+            for v in free_vars {
+                s.insert(v);
+            }
+
+            s.into_iter().collect()
+        }
+        Type::Scheme(items, _) => items.clone(),
+        Type::Int | Type::Bool => HashSet::new(),
+    }
+}
+
+/// Generalize a type T to forall X1..Xn.T where X1..Xn \in FV(T) and \not\in TypeEnv
+fn generalize(t: &Type, env: &TypeEnv) -> Type {
+    // Get the free type variables in the term t
+    let free_vars = get_free_vars(t, env);
+
+    if !free_vars.is_empty() {
+        // Create scheme
+        Type::Scheme(free_vars, Box::new(t.clone()))
+    } else {
+        t.clone()
+    }
+
+}
+
+/// Instantiates the type t to create a new type
+fn instantiate(t: &Type, env: &mut TypeEnv) -> Type {
+    match t {
+        Type::Scheme(vars, typ) => {
+            let s = Substitution(
+                vars.iter()
+                    .map(|x| (Type::Var(env.get_fresh_var()), x.clone()))
+                    .collect(),
+            );
+
+            s.apply(*typ.clone())
+        }
+        _ => t.clone(),
+    }
+}
+
 fn apply_sub(t: Type, sub: &(Type, String)) -> Type {
     let (new_t, var_name) = &sub;
     match t {
-        // Primitive types don't substitute anything
         Type::Int | Type::Bool => t.clone(),
         Type::Var(ref name) => {
             if *name == *var_name {
@@ -193,6 +327,8 @@ fn apply_sub(t: Type, sub: &(Type, String)) -> Type {
         Type::Arrow(t1, t2) => {
             Type::Arrow(Box::new(apply_sub(*t1, sub)), Box::new(apply_sub(*t2, sub)))
         }
+
+        Type::Scheme(_, _) => t.clone(),
     }
 }
 
@@ -221,20 +357,26 @@ fn unify(t1: Type, t2: Type) -> Option<Substitution> {
 
     match (t1, t2) {
         (Int, Int) | (Bool, Bool) => Some(Substitution::id()),
-        (typ, Var(name)) => Some((typ, name).into()),
-        (Var(name), typ) => Some((typ, name).into()),
+        (typ, Var(name)) | (Var(name), typ) => Some((typ, name).into()),
+        //(Var(name), typ) => Some((typ, name).into()),
         (Arrow(t11, t12), Arrow(t21, t22)) => {
             let s1 = unify(*t11, *t21)?;
-            let s2 = unify(*t12, *t22)?;
+            let s2 = unify(s1.apply(*t12), s1.apply(*t22))?;
 
             Some(s2.compose(&s1))
         }
-        _ => None,
+        (Int | Bool, _) => None,
+        (_, Int | Bool) => None,
+        _ => None, //(Arrow(_, _), Scheme(items, _)) => todo!(),
+                   //(Scheme(items, _), Arrow(_, _)) => todo!(),
+                   //(Scheme(items, _), Scheme(items, _)) => todo!(),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::parser::parse_lambda;
+
     use super::*;
 
     #[test]
@@ -430,9 +572,67 @@ mod tests {
         let e = Expr::Lambda("x".to_string(), None, Box::new(Expr::Var("x".to_string())));
         let id = Type::Arrow(
             Box::new(Type::Var("v0".to_string())),
-            Box::new(Type::Var("v0".to_string()))
+            Box::new(Type::Var("v0".to_string())),
         );
 
         assert_eq!(infer_type(&e), Ok(id));
+    }
+
+    #[test]
+    fn maybe_function() {
+        // if function
+        // \b -> \t -> \f -> if b then t else f
+        use Type::*;
+
+        let (_, es) =
+            parse_lambda(r"\t -> \f -> \c -> if c then t else f").expect("Should parse if");
+        let expected = Arrow(
+            Box::new(Var("v0".to_string())),
+            Box::new(Arrow(
+                Box::new(Var("v0".to_string())),
+                Box::new(Arrow(
+                    Box::new(Type::Bool),
+                    Box::new(Type::Var("v0".to_string())),
+                )),
+            )),
+        );
+
+        assert_eq!(infer_type(&es), Ok(expected));
+    }
+}
+
+#[cfg(test)]
+mod scheme {
+    use super::*;
+
+    fn id_type() -> Type {
+        Type::Arrow(
+            Box::new(Type::Var("a".to_string())),
+            Box::new(Type::Var("a".to_string())),
+        )
+    }
+
+    #[test]
+    fn simple_generalize() {
+        let t = id_type();
+        let env = TypeEnv::new();
+        let scheme = generalize(&t, &env);
+
+        assert_eq!(
+            scheme,
+            Type::Scheme(["a".to_string()].into(), Box::new(id_type()))
+        );
+    }
+
+    #[test]
+    fn simple_instantiate() {
+        let t = id_type();
+        let mut env = TypeEnv::new();
+        let scheme = generalize(&t, &env);
+
+        let id = instantiate(&scheme, &mut env);
+
+        assert_ne!(scheme, id);
+        assert_ne!(id, t);
     }
 }
