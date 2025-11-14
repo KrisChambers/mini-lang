@@ -146,20 +146,15 @@ pub fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
         },
         App(e1, e2) => {
             let (s1, t1) = w(*e1.clone(), te.clone())?;
-            //println!("app func {e1:?} : {t1:?}");
             let (s2, t2) = w(*e2.clone(), te.apply_sub(&s1))?;
-            //println!("app arg  {e2:?} : {t2:?}");
+
             let u = te.get_fresh_var();
             let t = Type::Arrow(Box::new(t2), Box::new(Type::Var(u.clone())));
+
             let t1 = instantiate(&t1, &mut te);
-            //println!("unify {t1:?} and {t:?}");
-            //println!("s2 {s2:?}");
-            //println!("s1 {s1:?}");
             if let Some(s3) = unify(s2.apply(t1.clone()), t.clone()) {
                 let s = s3.compose(&s2).compose(&s1);
-             //   println!("sub {s3:?}");
                 let t = s.apply(Type::Var(u));
-                //println!("final T = {t:?}");
                 Ok((s.clone(), t))
             } else {
                 Err(format!("Could not unify {t1:?} of {e1:?} with {t:?}"))
@@ -168,12 +163,9 @@ pub fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
         Lambda(var_name, _type_ann, expr) => {
             let new_te = te.extend_fresh(&var_name);
             let u = new_te.get(&var_name).unwrap();
-            println!("{te:?}");
 
             let (s1, t1) = w(*expr, new_te)?;
             let t = Type::Arrow(Box::new(s1.apply(u)), Box::new(t1));
-
-            println!("{s1:?}");
 
             Ok((s1, t))
         }
@@ -207,9 +199,6 @@ pub fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
             },
         )),
         BinOp(op, e1, e2) => {
-            // e1 + e2
-            // This needs to be thought out a bit more.
-
             use crate::parser::Op::*;
             let desugared_func = match op {
                 Add | Subtract => "binary_int".to_string(),
@@ -229,47 +218,19 @@ pub fn w(e: Expr, mut te: TypeEnv) -> Result<(Substitution, Type), String> {
             w(desugared, te.clone())
         }
         Let(var_name, e1, e2) => {
-            //println!("");
-            // TODO(kc):
-            // We need to implement the generalization and instantiation
-            // id = \x -> x Should be typed as forall a. a -> a
-            // When we want to do something like id 5.
-            // We first look up the type of id.
-            //   Then we instantiate it with a fresh type variable
-            //      This gives us a type b -> b
-            //          We then unify this type with type of 5
-            //      Same goes for id True
-            //
-            //      We are not properly handling the generalization / instantiation of types
-
-            // First we assign a type to the variable `var_name`
-
-            // let x = e1 in e2
 
             //1. Create a fresh type variable for x
             let sub_te = te.extend_fresh(&var_name);
             let a = sub_te.get(&var_name).unwrap();
-            //println!("{var_name:?} : {a:?}");
-
-            // Next we infer the type of e1 and then unify with var_name
-            // I think it is here that we want to create a TypeScheme.
-            // TODO (kc): GO through some pen and pencil examples for this.
-
-            // The type here should always end up being a type scheme (maybe w should always return a type
-            // scheme?)
 
             //2. Calculate the type of e1 to get t1 and s1
             let (s1, t1) = w(*e1.clone(), sub_te.clone())?;
             let t1 = generalize(&t1, &te);
-            //println!("{e1:?} : {t1:?}");
 
             //3. Unify t1 and `a` to get s2, this should give us a substitution for the most general t1
             let s2 = unify(s1.apply(a), t1.clone()).ok_or("Invalid".to_string())?;
-            //println!("unify via {s2:?}");
-
 
             let sub_te = te.apply_sub(&s2.compose(&s1)).append(&var_name, &t1);
-            //println!("sub_te :: {sub_te:?}");
             let (s3, t2) = w(*e2, sub_te.clone())?;
 
             Ok((s3.compose(&s2.compose(&s1)), t2.clone()))
