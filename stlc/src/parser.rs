@@ -125,6 +125,13 @@ fn parse_binary_op(input: &str) -> IResult<&str, Op> {
     .parse(input)
 }
 
+fn next<T>(input: &str, to_return: T) -> IResult<&str, T>
+    where T : Clone
+{
+    value(to_return, tag("")).parse(input)
+
+}
+
 pub fn parse_binary_expr(input: &str) -> IResult<&str, Expr> {
     // 5 + 5
     // (5 + 5) + 5
@@ -134,21 +141,20 @@ pub fn parse_binary_expr(input: &str) -> IResult<&str, Expr> {
     // Expr OP Lit
     // Lit OP Expr
     let (input, left) = alt((
+        parse_literal,
         delimited(
             tag("("),
-            delimited(opt_whitespace, parse_binary_expr, opt_whitespace),
+            delimited(opt_whitespace, parse_expr, opt_whitespace),
             tag(")"),
         ),
-        parse_literal,
     ))
     .parse(input)?;
 
     let (input, op) = delimited(opt_whitespace, parse_binary_op, opt_whitespace).parse(input)?;
 
-    map(alt((parse_binary_expr, parse_literal)), |right| {
-        Expr::BinOp(op.clone(), Box::new(left.clone()), Box::new(right.clone()))
-    })
-    .parse(input)
+    let (input, right) = alt((parse_literal, parse_expr)).parse(input)?;
+
+    next(input, Expr::BinOp(op.clone(), Box::new(left.clone()), Box::new(right.clone())))
 }
 
 fn parse_literal_int(input: &str) -> IResult<&str, Expr> {
@@ -529,20 +535,6 @@ let c = 3".trim();
     }
 
     #[test]
-    fn test_parse_atomic_term_debug() {
-        // Test parsing a single atomic term
-        let result1 = parse_atomic_term("inc");
-        println!("parse_atomic_term('inc'): {:?}", result1);
-
-        let result2 = parse_atomic_term(" inc");
-        println!("parse_atomic_term(' inc'): {:?}", result2);
-
-        // Test parsing with parse_literal directly
-        let result3 = parse_literal("inc");
-        println!("parse_literal('inc'): {:?}", result3);
-    }
-
-    #[test]
     fn test_parse_simple_application() {
         let input = "compose inc inc";
         let result = parse_expr(input);
@@ -558,6 +550,29 @@ let c = 3".trim();
             Expr::App(_, _) => {},
             _ => panic!("Expected application expression, got {:?}", expr)
         }
+    }
+
+    #[test]
+    fn test_addition_application() {
+        let input = r"
+(f 1) + (g 1)
+".trim();
+
+        let (remaining, expr) = parse_binary_expr(input).unwrap();
+        assert_eq!(remaining, "");
+
+        let expected = Expr::BinOp(Op::Add,
+            Box::new(Expr::App(
+                Box::new(Expr::Var("f".to_string())),
+                Box::new(Expr::Lit(Literal::Int(1)))
+            )),
+            Box::new(Expr::App(
+                Box::new(Expr::Var("g".to_string())),
+                Box::new(Expr::Lit(Literal::Int(1)))
+            ))
+        );
+
+        assert_eq!(expr, expected);
     }
 
     #[test]

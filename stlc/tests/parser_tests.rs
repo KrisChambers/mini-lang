@@ -508,3 +508,34 @@ fn parse_let_with_lambda_and_application() {
     let (_, actual) = stlc::parser::parse_let_expr(input).unwrap();
     assert_eq!(actual, expected);
 }
+
+#[test]
+
+fn parse_top_level_expression_into_wrapped_let_chain() {
+    let input1 = r"
+let tru = \x -> \y -> x
+
+let fls = \x -> \y -> y
+
+let and = \x -> \y -> x y fls
+
+".trim();
+
+    let input2 = r"
+let result =
+    let tru = \x -> \y -> x in
+    let fls = \x -> \y -> y in
+    let and = \x -> \y -> x y fls in and
+in
+    result
+".trim();
+
+    let (_, actual1) = stlc::parser::parse_program(input1).unwrap();
+    let (_, actual2) = stlc::parser::parse_program(input2).unwrap();
+    let unwrap = match actual2 {
+        Expr::Let(_, real, _) => *real,
+        _ => panic!("wtf")
+    };
+    assert_eq!(actual1, unwrap);
+
+}
