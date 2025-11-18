@@ -19,12 +19,7 @@ pub enum Type {
 impl Type {
     fn free_vars(&self) -> HashSet<String> {
         match self {
-            Type::Var(name) => {
-                let v = vec![name.clone()];
-
-              v.into_iter().collect()
-            //    v.into_iter().filter(|x| !bound_vars.contains(&x)).collect()
-            }
+            Type::Var(name) => vec![name.clone()].into_iter().collect(),
             Type::Arrow(t1, t2) => {
                 let mut s: HashSet<String> = HashSet::new();
                 let free_vars = t1.free_vars()
