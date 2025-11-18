@@ -1,6 +1,14 @@
 use nom::{
-    branch::alt, bytes::complete::tag, character::complete::{alpha1, alphanumeric1, digit1, multispace0, multispace1}, combinator::{eof, map, not, opt, peek, value}, multi::{many0, many1, separated_list1}, sequence::{self, delimited, preceded, terminated, tuple}, IResult, Parser
+    branch::alt, bytes::complete::tag, character::complete::{alpha1, alphanumeric1, digit1, multispace0, multispace1}, combinator::{eof, map, not, opt, peek, recognize, value}, multi::{fold_many1, many0, many1, separated_list1}, sequence::{self, delimited, pair, preceded, terminated, tuple}, Err, IResult, Parser
 };
+
+// Parse an identifier: starts with letter, followed by letters/digits/underscores
+fn identifier(input: &str) -> IResult<&str, &str> {
+    recognize(pair(
+        alpha1,
+        many0(alt((alphanumeric1, tag("_"))))
+    )).parse(input)
+}
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum Expr {
@@ -61,14 +69,12 @@ fn parse_top_level_let(input: &str) -> IResult<&str, Expr> {
     let (input, _) = value((), (opt_whitespace, tag("let"), opt_whitespace)).parse(input)?;
     let (input, (name, e)) = parse_let_assignment(input)?;
 
-    nom::IResult::Ok((
-        input,
-        Expr::Let(
+    next(input, Expr::Let(
             name.clone(),
             Box::new(e.clone()),
-            Box::new(Expr::Var(name.clone())),
-        ),
+            Box::new(Expr::Var(name.clone()))
     ))
+
 }
 
 
@@ -132,6 +138,26 @@ fn next<T>(input: &str, to_return: T) -> IResult<&str, T>
 
 }
 
+fn parse_binary_arg(input: &str) -> IResult<&str, Expr> {
+    alt((
+            delimited(
+                tag("("),
+                delimited(opt_whitespace, parse_expr, opt_whitespace),
+                tag(")"),
+            ),
+            parse_literal,
+        ))
+        .parse(input)
+}
+
+fn parse_binary_pair(input: &str) -> IResult<&str, (Op, Expr)> {
+    let (input, op) = parse_binary_op(input)?;
+    let (input, _) = opt_whitespace(input)?;
+    let (input, expr) = parse_binary_arg(input)?;
+
+    next(input, (op, expr))
+}
+
 pub fn parse_binary_expr(input: &str) -> IResult<&str, Expr> {
     // 5 + 5
     // (5 + 5) + 5
@@ -140,21 +166,16 @@ pub fn parse_binary_expr(input: &str) -> IResult<&str, Expr> {
     // Lit OP Lit
     // Expr OP Lit
     // Lit OP Expr
-    let (input, left) = alt((
-        parse_literal,
-        delimited(
-            tag("("),
-            delimited(opt_whitespace, parse_expr, opt_whitespace),
-            tag(")"),
-        ),
-    ))
-    .parse(input)?;
 
-    let (input, op) = delimited(opt_whitespace, parse_binary_op, opt_whitespace).parse(input)?;
+    //println!("--\n{input}\n--");
+    let (input, left) = parse_binary_arg(input)?;
+    let (input, _) = opt_whitespace(input)?;
 
-    let (input, right) = alt((parse_literal, parse_expr)).parse(input)?;
+    let combine = |left: Expr, (op, right): (Op, Expr)| {
+        Expr::BinOp(op, Box::new(left), Box::new(right))
+    };
 
-    next(input, Expr::BinOp(op.clone(), Box::new(left.clone()), Box::new(right.clone())))
+    fold_many1(parse_binary_pair, || {left.clone()}, combine).parse(input)
 }
 
 fn parse_literal_int(input: &str) -> IResult<&str, Expr> {
@@ -174,7 +195,7 @@ fn parse_literal_bool(input: &str) -> IResult<&str, Expr> {
 
 fn parse_variable(input: &str) -> IResult<&str, Expr> {
     map(
-        (opt_whitespace, alphanumeric1),
+        (opt_whitespace, identifier),
         |(_, x)| Expr::Var(x.to_string()),
     )
     .parse(input)
@@ -219,6 +240,7 @@ pub fn parse_literal(input: &str) -> IResult<&str, Expr> {
 */
 
 pub fn parse_expr(input: &str) -> IResult<&str, Expr> {
+    //println!(">>> {input}");
     alt((
         parse_let_expr,
         parse_if_expr,
@@ -241,7 +263,7 @@ pub fn parse_lambda(input: &str) -> IResult<&str, Expr> {
             delimited(tag(r"\("), parse_lambda_parameter, tag(")")),
             |(p, t)| (p, Some(t)),
         ),
-        map(preceded(tag(r"\"), alpha1), |x: &str| (x.to_string(), None)),
+        map(preceded(tag(r"\"), identifier), |x: &str| (x.to_string(), None)),
     ))
     .parse(input)?;
 
@@ -264,7 +286,7 @@ fn parse_lambda_parameter(input: &str) -> IResult<&str, (String, TypeAnn)> {
      * y : Bool
      * z : Int -> Int
      * */
-    let (input, name) = map(delimited(opt_whitespace, alpha1, opt_whitespace), |s| {
+    let (input, name) = map(delimited(opt_whitespace, identifier, opt_whitespace), |s| {
         s.to_string()
     })
     .parse(input)?;
@@ -318,9 +340,9 @@ fn parse_keyword(keyword: &str) -> impl Fn(&str) -> IResult<&str, &str> {
 }
 
 pub fn parse_let_assignment(input: &str) -> IResult<&str, (String, Expr)> {
-    let (input, var) = preceded(opt_whitespace, alphanumeric1).parse(input)?;
+    let (input, var) = preceded(opt_whitespace, identifier).parse(input)?;
     let (input, _) = preceded(opt_whitespace, tag("=")).parse(input)?;
-    let (input, e1) = parse_expr(input)?;
+    let (input, e1) = preceded(opt_whitespace, parse_expr).parse(input)?;
 
     nom::IResult::Ok((input, (var.to_string(), e1)))
 }
@@ -396,6 +418,46 @@ pub fn parse_application_expr(input: &str) -> IResult<&str, Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_parsing_chain_binary_expr() {
+        let input = "x + y + a + b";
+        let (input, expr) = parse_binary_expr(input).unwrap();
+
+        let expected = Expr::BinOp(Op::Add,
+            Box::new(Expr::BinOp(Op::Add,
+                Box::new(Expr::BinOp(Op::Add,
+                    Box::new(Expr::Var("x".into())),
+                    Box::new(Expr::Var("y".into()))
+
+                )),
+                Box::new(Expr::Var("a".into()))
+            )),
+            Box::new(Expr::Var("b".into()))
+        );
+
+        assert_eq!(input, "");
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_mixed_app_and_binary_expr() {
+        let input = "(f 1) + (g 1)";
+        let expected = Expr::BinOp(Op::Add,
+            Box::new(Expr::App(
+                Box::new(Expr::Var("f".to_string())),
+                Box::new(Expr::Lit(Literal::Int(1)))
+            )),
+            Box::new(Expr::App(
+                Box::new(Expr::Var("g".to_string())),
+                Box::new(Expr::Lit(Literal::Int(1)))
+            ))
+        );
+        let (input, expr) = parse_expr(input).unwrap();
+
+        assert_eq!(input, "");
+        assert_eq!(expr, expected);
+    }
 
     #[test]
     fn parsing_let_assignment_sugar() {
@@ -538,41 +600,14 @@ let c = 3".trim();
     fn test_parse_simple_application() {
         let input = "compose inc inc";
         let result = parse_expr(input);
-        println!("Parsing '{}'", input);
-        println!("Result: {:?}", result);
         assert!(result.is_ok());
         let (remaining, expr) = result.unwrap();
-        println!("Remaining: '{}'", remaining);
-        println!("Expr: {:?}", expr);
 
         // Should parse as App(App(Var("compose"), Var("inc")), Var("inc"))
         match expr {
             Expr::App(_, _) => {},
             _ => panic!("Expected application expression, got {:?}", expr)
         }
-    }
-
-    #[test]
-    fn test_addition_application() {
-        let input = r"
-(f 1) + (g 1)
-".trim();
-
-        let (remaining, expr) = parse_binary_expr(input).unwrap();
-        assert_eq!(remaining, "");
-
-        let expected = Expr::BinOp(Op::Add,
-            Box::new(Expr::App(
-                Box::new(Expr::Var("f".to_string())),
-                Box::new(Expr::Lit(Literal::Int(1)))
-            )),
-            Box::new(Expr::App(
-                Box::new(Expr::Var("g".to_string())),
-                Box::new(Expr::Lit(Literal::Int(1)))
-            ))
-        );
-
-        assert_eq!(expr, expected);
     }
 
     #[test]

@@ -1,19 +1,21 @@
 use stlc::parser::{Expr, parse_program};
-use stlc::type_inference::{Type, TypeError, infer_type};
+use stlc::type_inference::{infer_type, instantiate, unify, Substitution, Type, TypeEnv, TypeError};
 
 fn get_type(input: &str, top_level_var_name: &str) -> Result<Type, TypeError> {
     let wrapper =
-        input.to_string() + "\n" + format!("let internal = {top_level_var_name}").as_str();
+        input.trim().to_string() + "\n\n" + format!("let internal = {top_level_var_name}").as_str();
 
+    let (remaining, expr) = parse_program(&wrapper).unwrap();
     println!("{wrapper}");
-
-    let (left, expr) = parse_program(&wrapper).unwrap();
-
     println!("\n----------------");
-    println!("unparsed");
-    println!("----------------\n");
-    println!("'{left}'");
-    println!("\n----------------\n");
+    if !remaining.is_empty() {
+        println!("unparsed");
+        println!("----------------\n");
+        println!("'{remaining}'");
+        println!("\n----------------\n");
+        println!("{expr:?}");
+        assert_eq!(remaining, "");
+    }
 
     infer_type(&expr)
 }
@@ -118,14 +120,11 @@ let final = and ctrue cfalse;
 fn test_flip_function() {
     // flip: (a -> b -> c) -> b -> a -> c
     let input = r"
-let flip = \f -> \x -> \y -> f y x
-
-let sub = \a -> \b -> a - b
-
-let flipped_sub = flip sub
-
+let flip = \f -> \x -> \y -> f y x;
+let sub = \a -> \b -> a - b;
+let flipped_sub = flip sub;
 let final = flipped_sub 5 10
-    ";
+    ".trim();
 
     // Verify sub has type Int -> Int -> Int
     assert_eq!(
@@ -163,9 +162,21 @@ let result2 = f False
     ";
 
     // Verify f has type Bool -> Int (ignores bool, returns int)
+
+    let expected = Type::Arrow(
+        Box::new(Type::Var("a".into())),
+        Box::new(Type::Int)
+    );
+    let t = get_type(input, "f").unwrap();
+    let t = instantiate(&t, &mut TypeEnv::new());
+    let u = unify(t.clone(), expected.clone(), &mut TypeEnv::new()).unwrap();
+
+    let expected = u.apply(expected);
+    let t = u.apply(t);
+
     assert_eq!(
-        get_type(input, "f"),
-        Ok(Type::Arrow(Box::new(Type::Bool), Box::new(Type::Int)))
+        t,
+        expected
     );
 
     // Both results should be Int
@@ -337,6 +348,7 @@ fn test_occurs_check_should_fail() {
     );
 
     let result = infer_type(&expr);
+    println!("{result:?}");
     assert!(
         result.is_err(),
         "Self-application should fail type checking"

@@ -123,17 +123,24 @@ let id = \x -> x;
     assert_eq!(result, expected);
 
     let t = infer_type(&result).expect("Expect Type");
-    let t_var = Type::Var("v1".to_string());
+    let t_vars = match t.clone() {
+        Type::Scheme(vars, _) => vars.clone(),
+        _ => panic!("Expected a Type Scheme")
+    };
+
+    let v = Type::Var(t_vars.clone().into_iter().take(1).collect::<Vec<String>>()[0].clone());
+
+    let expected = Type::Scheme(
+            t_vars,
+            Box::new(Type::Arrow(
+                Box::new(v.clone()),
+                Box::new(v.clone())
+            ))
+        );
 
     assert_eq!(
         t,
-        Type::Scheme(
-            ["v1".to_string()].into(),
-            Box::new(Type::Arrow(
-                Box::new(t_var.clone()),
-                Box::new(t_var.clone())
-            ))
-        )
+        expected
     );
 }
 
