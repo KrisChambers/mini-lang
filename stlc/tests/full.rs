@@ -1,12 +1,9 @@
-use stlc::parser::{Expr, Literal, Op, parse, parse_program};
+use stlc::parser::{Expr, parse, parse_program};
 use stlc::type_inference::{Type, infer_type};
 
 #[test]
 fn binary_desugar() {
-    let input = r"
-let x = 3 + 2 + 4
-".trim();
-
+    let input = r"let x = 3 + 2 + 4 ".trim();
 
     let (_, result) = parse_program(input).unwrap();
     let t = infer_type(&result).unwrap();
@@ -21,30 +18,8 @@ let x = 3 in
     let add2 = \y -> y + 2
     in
         add2 x
-
 "
     .trim();
-
-    let expected = Expr::Let(
-        "x".to_string(),
-        Box::new(Expr::Lit(Literal::Int(3))),
-        Box::new(Expr::Let(
-            "add2".to_string(),
-            Box::new(Expr::Lambda(
-                "y".to_string(),
-                None,
-                Box::new(Expr::BinOp(
-                    Op::Add,
-                    Box::new(Expr::Var("y".to_string())),
-                    Box::new(Expr::Lit(Literal::Int(2))),
-                )),
-            )),
-            Box::new(Expr::App(
-                Box::new(Expr::Var("add2".to_string())),
-                Box::new(Expr::Var("x".to_string())),
-            )),
-        )),
-    );
 
     let ast = parse(input);
     assert!(ast.is_ok());
@@ -125,25 +100,20 @@ let id = \x -> x;
     let t = infer_type(&result).expect("Expect Type");
     let t_vars = match t.clone() {
         Type::Scheme(vars, _) => vars.clone(),
-        _ => panic!("Expected a Type Scheme")
+        _ => panic!("Expected a Type Scheme"),
     };
 
     let v = Type::Var(t_vars.clone().into_iter().take(1).collect::<Vec<String>>()[0].clone());
 
     let expected = Type::Scheme(
-            t_vars,
-            Box::new(Type::Arrow(
-                Box::new(v.clone()),
-                Box::new(v.clone())
-            ))
-        );
-
-    assert_eq!(
-        t,
-        expected
+        t_vars,
+        Box::new(Type::Arrow(Box::new(v.clone()), Box::new(v.clone()))),
     );
+
+    assert_eq!(t, expected);
 }
 
+#[test]
 fn identity_application() {
     let input = r"
 let v = let id = \x -> x in id 5
@@ -180,10 +150,8 @@ let b = id True
     assert_eq!(t, Type::Bool);
 }
 
-// This is almost done. Just some small kinks
 #[test]
 fn polymorphic_composition() {
-    use Type::*;
     let input = r"
 let compose = \f -> \g -> \x -> f (g x)
 
@@ -197,8 +165,6 @@ let g = compose not not
     "
     .trim();
 
-    // Now we check the types
-
     let get_type = |definitions: &str, var_name: &str| {
         let (_, expr) = parse_program(
             &(definitions.to_string() + "\n\n" + format!("let result = {var_name}").as_str()),
@@ -207,32 +173,6 @@ let g = compose not not
 
         infer_type(&expr).expect("Typing Failure")
     };
-
-    let compose_type = Scheme(
-        ["v4", "v5", "v3"]
-            .iter()
-            .map(|x| x.to_string())
-            .collect(),
-        Box::new(Scheme(
-            ["v4", "v5", "v3"].iter().map(|x| x.to_string()).collect(),
-            Box::new(Arrow(
-                Box::new(Arrow(
-                    Box::new(Var("v4".to_string())),
-                    Box::new(Var("v5".to_string())),
-                )),
-                Box::new(Arrow(
-                    Box::new(Arrow(
-                        Box::new(Var("v3".to_string())),
-                        Box::new(Var("v4".to_string())),
-                    )),
-                    Box::new(Arrow(
-                        Box::new(Var("v3".to_string())),
-                        Box::new(Var("v5".to_string())),
-                    )),
-                )),
-            )),
-        )),
-    );
 
     assert_eq!(
         get_type(input, "f"),

@@ -1,5 +1,5 @@
 use nom::{
-    branch::alt, bytes::complete::tag, character::complete::{alpha1, alphanumeric1, digit1, multispace0, multispace1}, combinator::{eof, map, not, opt, peek, recognize, value}, multi::{fold_many1, many0, many1, separated_list1}, sequence::{self, delimited, pair, preceded, terminated, tuple}, Err, IResult, Parser
+    branch::alt, bytes::complete::tag, character::complete::{alpha1, alphanumeric1, digit1, multispace0, multispace1}, combinator::{eof, map, not, opt, peek, recognize, value}, multi::{fold_many1, many0, separated_list1}, sequence::{self, delimited, pair, preceded, terminated}, IResult, Parser
 };
 
 // Parse an identifier: starts with letter, followed by letters/digits/underscores
@@ -301,10 +301,6 @@ fn parse_lambda_parameter(input: &str) -> IResult<&str, (String, TypeAnn)> {
         .parse(input)
 }
 
-fn parse_lambda_parameter_name(input: &str) -> IResult<&str, String> {
-    map(alpha1, |s: &str| s.to_string()).parse(input)
-}
-
 fn parse_arrow(input: &str) -> IResult<&str, &str> {
     terminated(preceded(opt(multispace0), tag("->")), opt(multispace0)).parse(input)
 }
@@ -601,7 +597,7 @@ let c = 3".trim();
         let input = "compose inc inc";
         let result = parse_expr(input);
         assert!(result.is_ok());
-        let (remaining, expr) = result.unwrap();
+        let (_, expr) = result.unwrap();
 
         // Should parse as App(App(Var("compose"), Var("inc")), Var("inc"))
         match expr {

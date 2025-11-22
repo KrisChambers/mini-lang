@@ -1,21 +1,11 @@
 use stlc::parser::{Expr, parse_program};
-use stlc::type_inference::{infer_type, instantiate, unify, Substitution, Type, TypeEnv, TypeError};
+use stlc::type_inference::{infer_type, instantiate, unify, Type, TypeEnv, TypeError};
 
 fn get_type(input: &str, top_level_var_name: &str) -> Result<Type, TypeError> {
     let wrapper =
         input.trim().to_string() + "\n\n" + format!("let internal = {top_level_var_name}").as_str();
 
-    let (remaining, expr) = parse_program(&wrapper).unwrap();
-    println!("{wrapper}");
-    println!("\n----------------");
-    if !remaining.is_empty() {
-        println!("unparsed");
-        println!("----------------\n");
-        println!("'{remaining}'");
-        println!("\n----------------\n");
-        println!("{expr:?}");
-        assert_eq!(remaining, "");
-    }
+    let (_, expr) = parse_program(&wrapper).unwrap();
 
     infer_type(&expr)
 }

@@ -199,7 +199,7 @@ fn inner_type_check(expr: Expr, env: &mut TypeEnvironment) -> Option<TypeError> 
                     None
                 }
             }
-        Expr::Let(_, expr, expr1) => todo!(),
+        Expr::Let(_, _, _) => todo!(),
     }
 }
 
@@ -217,6 +217,6 @@ fn get_type(expr: Expr, env: &mut TypeEnvironment) -> Option<Type> {
                 Op::Add | Op::Subtract => Type::Int,
                 Op::And | Op::Or => Type::Bool,
             }),
-        Expr::Let(_, expr, expr1) => todo!(),
+        Expr::Let(_, _, _) => todo!(),
     }
 }
